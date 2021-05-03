@@ -1,50 +1,43 @@
-from typing import Any, List
+from pydantic import Field
+from typing import List
 from . import SetError
 
 
 class Forbidden(SetError):
-    name = "forbidden"
+    pass
 
 
 class OverQuota(SetError):
-    name = "overQuota"
+    pass
 
 
 class TooLarge(SetError):
-    name = "tooLarge"
+    pass
 
 
 class RateLimit(SetError):
-    name = "rateLimit"
+    pass
 
 
 class NotFound(SetError):
-    name = "notFound"
+    pass
 
 
 class InvalidPatch(SetError):
-    name = "invalidPatch"
+    pass
 
 
 class WillDestroy(SetError):
-    name = "willDestroy"
+    pass
 
 
 class InvalidProperties(SetError):
-    name = "invalidProperties"
-
-    def __init__(self, properties: List[str] = [], **kwargs: Any) -> None:
-        if properties:
-            kwargs["properties"] = properties
-        super().__init__(**kwargs)
+    properties: List[str] = Field(default_factory=list)
 
 
 class Singleton(SetError):
-    name = "singleton"
+    pass
 
 
 class AlreadyExists(SetError):
-    name = "alreadyExists"
-
-    def __init__(self, existingId: str, **kwargs: Any) -> None:
-        super().__init__(existingId=existingId, **kwargs)
+    existing_id: str

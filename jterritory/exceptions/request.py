@@ -1,21 +1,17 @@
-from typing import Any
 from . import RequestError
 
 
 class UnknownCapability(RequestError):
-    name = "urn:ietf:params:jmap:error:unknownCapability"
+    pass
 
 
 class NotJSON(RequestError):
-    name = "urn:ietf:params:jmap:error:notJSON"
+    pass
 
 
 class NotRequest(RequestError):
-    name = "urn:ietf:params:jmap:error:notRequest"
+    pass
 
 
 class Limit(RequestError):
-    name = "urn:ietf:params:jmap:error:limit"
-
-    def __init__(self, limit: str, **kwargs: Any) -> None:
-        super().__init__(limit=limit, **kwargs)
+    limit: str

@@ -1,8 +1,36 @@
-from sqlalchemy import func, select
-from sqlalchemy.future import Connection
-from typing import NamedTuple, Optional, TypedDict
-from . import models
-from .exceptions import method
+from pydantic import BaseModel as PydanticBaseModel
+from pydantic.generics import GenericModel as PydanticGenericModel
+from typing import Any, Dict, NamedTuple, Type, TypedDict
+
+
+class BaseModel(PydanticBaseModel):
+    class Config:
+        allow_population_by_field_name = True
+
+        @staticmethod
+        def alias_generator(name: str) -> str:
+            words = name.split("_")
+            return "".join(words[:1] + [word.capitalize() for word in words[1:]])
+
+        @staticmethod
+        def schema_extra(schema: Dict[str, Any], model: Type["BaseModel"]) -> None:
+            props = schema["properties"]
+            for field in model.__fields__.values():
+                props[field.alias]["title"] = field.name.replace("_", " ").capitalize()
+
+    def json(self, **kwargs: Any) -> str:
+        # Change some defaults but allow callers to override:
+        kwargs = {
+            "by_alias": True,
+            "exclude_defaults": True,
+            **kwargs,
+        }
+        return super().json(**kwargs)
+
+
+class GenericModel(PydanticGenericModel):
+    class Config(BaseModel.Config):
+        pass
 
 
 class ObjectId(int):
@@ -29,41 +57,3 @@ class ObjectPosition(NamedTuple):
             "index": self.position,
             "id": str(self.objectId),
         }
-
-
-class Account(NamedTuple):
-    id: int
-    account: str
-    details: dict
-
-
-class Datatype:
-    def __init__(self, connection: Connection, accountId: str, datatype: int) -> None:
-        account: Optional[Account] = connection.execute(
-            models.accounts.select().where(models.accounts.c.account == accountId)
-        ).first()
-        if account is None:
-            raise method.AccountNotFound()
-
-        self.connection = connection
-        self.account = account
-        self.datatype = datatype
-
-    def __str__(self) -> str:
-        return f"{self.account.account}/{self.datatype}"
-
-    @property
-    def accountId(self) -> str:
-        return self.account.account
-
-    @property
-    def id(self) -> int:
-        return self.datatype
-
-    def lastChanged(self) -> int:
-        result = self.connection.scalar(
-            select(func.max(models.objects.c.changed))
-            .where(models.objects.c.account == self.account.id)
-            .where(models.objects.c.datatype == self.id)
-        )
-        return result or 0

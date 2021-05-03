@@ -1,84 +1,77 @@
-from typing import Any
 from . import MethodError
 
 
 class ServerUnavailable(MethodError):
-    name = "serverUnavailable"
+    pass
 
 
 class ServerFail(MethodError):
-    name = "serverFail"
-
-    def __init__(self, description: str, **kwargs: Any) -> None:
-        super().__init__(description=description, **kwargs)
+    description: str
 
 
 class ServerPartialFail(MethodError):
-    name = "serverPartialFail"
+    pass
 
 
 class UnknownMethod(MethodError):
-    name = "unknownMethod"
+    pass
 
 
 class InvalidArguments(MethodError):
-    name = "invalidArguments"
-
-    def __init__(self, description: str, **kwargs: Any) -> None:
-        super().__init__(description=description, **kwargs)
+    description: str
 
 
 class InvalidResultReference(MethodError):
-    name = "invalidResultReference"
+    pass
 
 
 class Forbidden(MethodError):
-    name = "forbidden"
+    pass
 
 
 class AccountNotFound(MethodError):
-    name = "accountNotFound"
+    pass
 
 
 class AccountNotSupportedByMethod(MethodError):
-    name = "accountNotSupportedByMethod"
+    pass
 
 
 class AccountReadOnly(MethodError):
-    name = "accountReadOnly"
+    pass
 
 
 class RequestTooLarge(MethodError):
-    name = "requestTooLarge"
+    pass
 
 
 class CannotCalculateChanges(MethodError):
-    name = "cannotCalculateChanges"
+    pass
 
 
 class StateMismatch(MethodError):
-    name = "stateMismatch"
+    pass
 
 
 class FromAccountNotFound(MethodError):
-    name = "fromAccountNotFound"
+    pass
 
 
 class FromAccountNotSupportedByMethod(MethodError):
-    name = "fromAccountNotSupportedByMethod"
+    pass
 
 
 class AnchorNotFound(MethodError):
-    name = "anchorNotFound"
+    pass
 
 
 class UnsupportedSort(MethodError):
-    name = "unsupportedSort"
+    pass
 
 
 class UnsupportedFilter(MethodError):
-    name = "unsupportedFilter"
+    pass
 
 
 class TooManyChanges(MethodError):
-    name = "tooManyChanges"
+    pass

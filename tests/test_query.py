@@ -1,26 +1,6 @@
 from hypothesis import given, note, strategies as st
-from jterritory.query import Changes, Compiler
+from jterritory.query import Changes
 from jterritory.types import ObjectId
-
-
-@given(
-    l=st.one_of(
-        st.lists(st.booleans()),
-        st.lists(st.integers() | st.floats(allow_nan=False)),
-    ),
-    reverse=st.booleans(),
-)
-def test_sortkey(l, reverse):
-    spec = {"property": "foo", "isAscending": not reverse}
-    sort = Compiler().sortKey(spec)
-    assert sorted(l, reverse=reverse) == sorted(l, key=sort.key)
-
-
-@given(l=st.lists(st.text()), reverse=st.booleans())
-def test_sortkey_strings(l, reverse):
-    spec = {"property": "foo", "isAscending": not reverse}
-    sort = Compiler().sortKey(spec)
-    assert sorted(l, key=str.casefold, reverse=reverse) == sorted(l, key=sort.key)
 
 
 def objectId(size=10):

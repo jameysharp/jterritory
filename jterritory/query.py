@@ -1,8 +1,6 @@
 from bisect import bisect_left
-from sqlalchemy import and_, not_, or_
-from sqlalchemy.sql import ClauseElement, ColumnElement
-from typing import Any, Callable, Dict, Iterable, List, NamedTuple, Sequence, Tuple
-from . import models
+from sqlalchemy.sql import ClauseElement
+from typing import Any, Callable, Iterable, List, NamedTuple, Sequence, Tuple
 from .exceptions import method
 from .types import ObjectId, ObjectPosition
 
@@ -13,9 +11,9 @@ class TypedKey(NamedTuple):
 
     def __lt__(self, other: object) -> bool:
         if not isinstance(other, TypedKey):
-            raise method.UnsupportedSort()
+            raise method.UnsupportedSort().exception()
         if not isinstance(other.obj, self.compatible):
-            raise method.UnsupportedSort()
+            raise method.UnsupportedSort().exception()
         return self.obj < other.obj
 
     def descending(self) -> "Reverse":
@@ -49,7 +47,7 @@ def autoKey(x: Any) -> TypedKey:
     elif isinstance(x, (int, float)):
         return numberKey(x)
     else:
-        raise method.UnsupportedSort()
+        raise method.UnsupportedSort().exception()
 
 
 class SortKey(NamedTuple):
@@ -59,55 +57,6 @@ class SortKey(NamedTuple):
     def descending(self) -> "SortKey":
         key = self.key
         return self._replace(key=lambda x: key(x).descending())
-
-
-class Compiler:
-    def filterOperator(self, spec: Any) -> ColumnElement:
-        if not isinstance(spec, dict):
-            raise method.InvalidArguments(description=f"filter={spec}")
-
-        try:
-            op = spec["operator"]
-        except KeyError:
-            return self.filterCondition(spec)
-
-        conditions = spec.get("conditions")
-        if not conditions or not isinstance(conditions, list):
-            raise method.InvalidArguments(description=f"conditions={conditions}")
-
-        clauses = map(self.filterOperator, conditions)
-        if op == "AND":
-            return and_(*clauses)
-        if op == "OR":
-            return or_(*clauses)
-        if op == "NOT":
-            return and_(*map(not_, clauses))
-
-        raise method.InvalidArguments(description=f"operator={op}")
-
-    def filterCondition(self, spec: Dict[str, Any]) -> ColumnElement:
-        raise method.UnsupportedFilter()
-
-    def sortKey(self, spec: Dict[str, Any]) -> SortKey:
-        prop = spec.get("property")
-        if not isinstance(prop, str):
-            raise method.InvalidArguments(description=f"sort property {prop!r}")
-
-        if prop == "id":
-            key = SortKey(column=models.objects.c.id, key=numberKey)
-        else:
-            key = SortKey(column=models.objects.c.contents[prop])
-
-        isAscending = spec.get("isAscending", True)
-        if not isinstance(isAscending, bool):
-            raise method.InvalidArguments(
-                description=f"sort isAscending {isAscending!r}"
-            )
-
-        if not isAscending:
-            key = key.descending()
-
-        return key
 
 
 class ChangeValidityError(Exception):
