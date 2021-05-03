@@ -44,7 +44,7 @@ objects = Table(
     "objects",
     metadata,
     Column("id", Integer, primary_key=True),
-    Column("account", ForeignKey(accounts.c.id, ondelete="CASCADE"), nullable=False),
+    Column("account", ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False),
     # Application-assigned number representing a single datatype, such
     # as "Email" or "Todo". This allows applications to add functional
     # indexes to this metadata object to speed up common queries.

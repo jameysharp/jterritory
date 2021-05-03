@@ -1,6 +1,6 @@
 from bisect import bisect_left
 from sqlalchemy import and_, not_, or_
-from sqlalchemy.sql import ColumnElement
+from sqlalchemy.sql import ClauseElement, ColumnElement
 from typing import Any, Callable, Dict, Iterable, List, NamedTuple, Sequence, Tuple
 from . import models
 from .exceptions import method
@@ -53,7 +53,7 @@ def autoKey(x: Any) -> TypedKey:
 
 
 class SortKey(NamedTuple):
-    column: ColumnElement
+    column: ClauseElement
     key: Callable[[Any], TypedKey] = autoKey
 
     def descending(self) -> "SortKey":
