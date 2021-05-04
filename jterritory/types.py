@@ -2,7 +2,7 @@ from pydantic import ConstrainedInt, ConstrainedStr, StrictBool, StrictStr
 from pydantic import BaseModel as PydanticBaseModel
 from pydantic.generics import GenericModel as PydanticGenericModel
 import re
-from typing import Any, Dict, NamedTuple, Type, TypedDict
+from typing import Any, Dict, NamedTuple, Optional, Type
 
 
 class BaseModel(PydanticBaseModel):
@@ -66,14 +66,23 @@ class PositiveInt(Int):
     ge = 1
 
 
-class ObjectId(int):
-    def __str__(self) -> str:
-        return "o" + super().__str__()
+class ObjectId(Id):
+    """
+    An Id which is expected to name a particular object, though the
+    object might not exist.
+    """
 
+    @classmethod
+    def from_int(cls, value: int) -> "ObjectId":
+        return cls(f"o{value}")
 
-class AddedItem(TypedDict):
-    index: int
-    id: str
+    def to_int(self) -> Optional[int]:
+        if self[0] == "o":
+            try:
+                return int(self[1:])
+            except ValueError:
+                pass
+        return None
 
 
 class ObjectPosition(NamedTuple):
@@ -84,9 +93,3 @@ class ObjectPosition(NamedTuple):
         if not offset:
             return self
         return self._replace(position=self.position + offset)
-
-    def as_dict(self) -> AddedItem:
-        return {
-            "index": self.position,
-            "id": str(self.objectId),
-        }

@@ -5,6 +5,7 @@ on which datatypes the server understands.
 
 from typing import Dict, Optional, Set
 from .. import exceptions
+from ..api import Context
 from ..types import BaseModel, Id, String, UnsignedInt
 
 
@@ -13,6 +14,10 @@ class Echo(BaseModel):
 
     class Config:
         extra = "allow"
+
+
+def echo(ctx: Context, request: Echo) -> None:
+    ctx.add_response("Core/echo", request)
 
 
 class UploadResponse(BaseModel):
