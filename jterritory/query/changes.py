@@ -1,62 +1,6 @@
 from bisect import bisect_left
-from sqlalchemy.sql import ClauseElement
-from typing import Any, Callable, Iterable, List, NamedTuple, Sequence, Tuple
-from .exceptions import method
-from .types import ObjectId, ObjectPosition
-
-
-class TypedKey(NamedTuple):
-    compatible: Tuple[type, ...]
-    obj: Any
-
-    def __lt__(self, other: object) -> bool:
-        if not isinstance(other, TypedKey):
-            raise method.UnsupportedSort().exception()
-        if not isinstance(other.obj, self.compatible):
-            raise method.UnsupportedSort().exception()
-        return self.obj < other.obj
-
-    def descending(self) -> "Reverse":
-        return Reverse(self.compatible, self.obj)
-
-
-class Reverse(TypedKey):
-    __slots__ = ()
-
-    def __lt__(self, other: Any) -> bool:
-        return TypedKey.__lt__(other, self)
-
-
-def stringKey(x: Any) -> TypedKey:
-    return TypedKey((str,), x.casefold())
-
-
-def booleanKey(x: Any) -> TypedKey:
-    return TypedKey((bool,), x)
-
-
-def numberKey(x: Any) -> TypedKey:
-    return TypedKey((int, float), x)
-
-
-def autoKey(x: Any) -> TypedKey:
-    if isinstance(x, str):
-        return stringKey(x)
-    elif isinstance(x, bool):
-        return booleanKey(x)
-    elif isinstance(x, (int, float)):
-        return numberKey(x)
-    else:
-        raise method.UnsupportedSort().exception()
-
-
-class SortKey(NamedTuple):
-    column: ClauseElement
-    key: Callable[[Any], TypedKey] = autoKey
-
-    def descending(self) -> "SortKey":
-        key = self.key
-        return self._replace(key=lambda x: key(x).descending())
+from typing import Iterable, List, NamedTuple, Sequence
+from ..types import ObjectId, ObjectPosition
 
 
 class ChangeValidityError(Exception):

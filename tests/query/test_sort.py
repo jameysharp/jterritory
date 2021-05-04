@@ -1,5 +1,5 @@
 from hypothesis import given, strategies as st
-from jterritory.api import Comparator
+from jterritory.query.sort import Comparator
 
 
 @given(

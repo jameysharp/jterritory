@@ -1,55 +1,10 @@
 from pydantic import Field
-from pydantic import ConstrainedInt, ConstrainedStr, StrictBool, StrictStr
-import re
-from sqlalchemy import and_, not_, or_
-from sqlalchemy.sql import ColumnElement
-from typing import (
-    Any,
-    Dict,
-    Generic,
-    List,
-    Literal,
-    NamedTuple,
-    Optional,
-    Set,
-    TypeVar,
-    Union,
-)
-from . import exceptions, models
-from .exceptions import method
+from typing import Any, Dict, Generic, List, NamedTuple, Optional, Set, TypeVar, Union
+from . import exceptions
+from .query.filter import FilterImpl, FilterOperator
+from .query.sort import ComparatorImpl
 from .types import BaseModel, GenericModel
-from .query import SortKey, numberKey
-
-
-# https://tools.ietf.org/html/rfc8620#section-1.1
-String = StrictStr
-Number = float  # XXX: want to allow int or float but not string
-Boolean = StrictBool
-
-
-class Id(ConstrainedStr):
-    "https://tools.ietf.org/html/rfc8620#section-1.2"
-    strict = True
-    min_length = 1
-    max_length = 255
-    regex = re.compile(r"^[A-Za-z0-9_-]*$")
-
-
-class Int(ConstrainedInt):
-    "https://tools.ietf.org/html/rfc8620#section-1.3"
-    strict = True
-    le = (1 << 53) - 1
-    ge = -le
-
-
-class UnsignedInt(Int):
-    "https://tools.ietf.org/html/rfc8620#section-1.3"
-    ge = 0
-
-
-class PositiveInt(Int):
-    # Not specifically named in the RFC, but specified in prose sometimes.
-    ge = 1
+from .types import Boolean, Id, Int, PositiveInt, String, UnsignedInt
 
 
 class Invocation(NamedTuple):
@@ -152,49 +107,6 @@ class CopyResponse(BaseModel):
     new_state: String
     created: Optional[Dict[Id, BaseDatatype]]
     not_created: Optional[Dict[Id, exceptions.SetError]]
-
-
-class FilterCondition(BaseModel):
-    def compile(self) -> ColumnElement:
-        raise method.UnsupportedFilter().exception()
-
-
-FilterImpl = TypeVar("FilterImpl", bound=FilterCondition)
-
-
-class FilterOperator(GenericModel, Generic[FilterImpl]):
-    operator: Literal["AND", "OR", "NOT"]
-    conditions: "List[Union[FilterOperator[FilterImpl], FilterImpl]]"
-
-    def compile(self) -> ColumnElement:
-        clauses = [condition.compile() for condition in self.conditions]
-        if self.operator == "AND":
-            return and_(*clauses)
-        if self.operator == "OR":
-            return or_(*clauses)
-        if self.operator == "NOT":
-            return and_(*map(not_, clauses))
-        raise method.UnsupportedFilter().exception()
-
-
-class Comparator(BaseModel):
-    property: String
-    is_ascending: Boolean = True
-    collation: Optional[String]
-
-    def compile(self) -> SortKey:
-        if self.property == "id":
-            key = SortKey(column=models.objects.c.id, key=numberKey)
-        else:
-            key = SortKey(column=models.objects.c.contents[self.property])
-
-        if not self.is_ascending:
-            key = key.descending()
-
-        return key
-
-
-ComparatorImpl = TypeVar("ComparatorImpl", bound=Comparator)
 
 
 class QueryRequest(GenericModel, Generic[FilterImpl, ComparatorImpl]):

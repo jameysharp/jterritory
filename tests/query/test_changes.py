@@ -1,5 +1,5 @@
 from hypothesis import given, note, strategies as st
-from jterritory.query import Changes
+from jterritory.query.changes import Changes
 from jterritory.types import ObjectId
 
 

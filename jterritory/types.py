@@ -1,5 +1,7 @@
+from pydantic import ConstrainedInt, ConstrainedStr, StrictBool, StrictStr
 from pydantic import BaseModel as PydanticBaseModel
 from pydantic.generics import GenericModel as PydanticGenericModel
+import re
 from typing import Any, Dict, NamedTuple, Type, TypedDict
 
 
@@ -31,6 +33,37 @@ class BaseModel(PydanticBaseModel):
 class GenericModel(PydanticGenericModel):
     class Config(BaseModel.Config):
         pass
+
+
+# https://tools.ietf.org/html/rfc8620#section-1.1
+String = StrictStr
+Number = float  # XXX: want to allow int or float but not string
+Boolean = StrictBool
+
+
+class Id(ConstrainedStr):
+    "https://tools.ietf.org/html/rfc8620#section-1.2"
+    strict = True
+    min_length = 1
+    max_length = 255
+    regex = re.compile(r"^[A-Za-z0-9_-]*$")
+
+
+class Int(ConstrainedInt):
+    "https://tools.ietf.org/html/rfc8620#section-1.3"
+    strict = True
+    le = (1 << 53) - 1
+    ge = -le
+
+
+class UnsignedInt(Int):
+    "https://tools.ietf.org/html/rfc8620#section-1.3"
+    ge = 0
+
+
+class PositiveInt(Int):
+    # Not specifically named in the RFC, but specified in prose sometimes.
+    ge = 1
 
 
 class ObjectId(int):
