@@ -1,4 +1,3 @@
-from pydantic import Field
 from typing import Any, Dict, Generic, List, NamedTuple, Optional, Set, TypeVar, Union
 from . import exceptions
 from .query.filter import FilterImpl, FilterOperator
@@ -17,15 +16,15 @@ class Invocation(NamedTuple):
 class Request(BaseModel):
     "https://tools.ietf.org/html/rfc8620#section-3.3"
     using: Set[String]
-    method_calls: List[Invocation] = Field(title="Method calls")
-    created_ids: Optional[Dict[Id, Id]] = Field(title="Created Ids")
+    method_calls: List[Invocation]
+    created_ids: Optional[Dict[Id, Id]]
 
 
 class Response(BaseModel):
     "https://tools.ietf.org/html/rfc8620#section-3.4"
-    method_responses: List[Invocation] = Field(title="Method responses")
-    created_ids: Optional[Dict[Id, Id]] = Field(title="Created Ids")
-    session_state: String = Field(title="Session state")
+    method_responses: List[Invocation]
+    created_ids: Optional[Dict[Id, Id]]
+    session_state: String
 
 
 class BaseDatatype(BaseModel):
