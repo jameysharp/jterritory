@@ -2,7 +2,7 @@ from pydantic import ConstrainedInt, ConstrainedStr, StrictBool, StrictStr
 from pydantic import BaseModel as PydanticBaseModel
 from pydantic.generics import GenericModel as PydanticGenericModel
 import re
-from typing import Any, Dict, NamedTuple, Optional, Type
+from typing import Any, Dict, List, NamedTuple, Optional, Type
 
 
 class BaseModel(PydanticBaseModel):
@@ -64,6 +64,16 @@ class UnsignedInt(Int):
 class PositiveInt(Int):
     # Not specifically named in the RFC, but specified in prose sometimes.
     ge = 1
+
+
+class JSONPointer(String):
+    "https://tools.ietf.org/html/rfc6901"
+
+    def reference_tokens(self) -> List[str]:
+        v: str = self
+        if v.startswith("/"):
+            v = v[1:]
+        return [token.replace("~1", "/").replace("~0", "~") for token in v.split("/")]
 
 
 class ObjectId(Id):

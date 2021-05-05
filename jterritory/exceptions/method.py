@@ -1,3 +1,4 @@
+from typing import Optional
 from . import MethodError
 
 
@@ -6,7 +7,7 @@ class ServerUnavailable(MethodError):
 
 
 class ServerFail(MethodError):
-    description: str
+    description: Optional[str]
 
 
 class ServerPartialFail(MethodError):
@@ -18,7 +19,7 @@ class UnknownMethod(MethodError):
 
 
 class InvalidArguments(MethodError):
-    description: str
+    description: Optional[str]
 
 
 class InvalidResultReference(MethodError):

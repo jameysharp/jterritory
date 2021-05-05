@@ -14,6 +14,7 @@ https://tools.ietf.org/html/rfc8620#section-5
 """
 
 from itertools import islice
+import re
 from sqlalchemy import func, select, and_, or_
 import typing
 from typing import Any, Dict, Generic, List, Optional, Set, Tuple, Type, TypeVar, Union
@@ -24,7 +25,7 @@ from ..exceptions import method
 from ..query.filter import FilterImpl, FilterOperator
 from ..query.sort import ComparatorImpl
 from ..types import BaseModel, GenericModel, ObjectId
-from ..types import Boolean, Id, Int, PositiveInt, String, UnsignedInt
+from ..types import Boolean, Id, Int, JSONPointer, PositiveInt, String, UnsignedInt
 
 
 class BaseDatatype(BaseModel):
@@ -70,7 +71,11 @@ class ChangesResponse(BaseModel):
     destroyed: Set[ObjectId]
 
 
-PatchObject = Dict[String, Any]
+class PatchPointer(JSONPointer):
+    regex = re.compile("^[^/]")
+
+
+PatchObject = Dict[PatchPointer, Any]
 
 
 class SetRequest(BaseModel):
@@ -78,8 +83,8 @@ class SetRequest(BaseModel):
     account_id: Id
     if_in_state: Optional[String]
     create: Optional[Dict[Id, dict]]
-    update: Optional[Dict[Id, PatchObject]]
-    destroy: Optional[Set[Id]]
+    update: Optional[Dict[ObjectId, PatchObject]]
+    destroy: Optional[Set[ObjectId]]
 
 
 class SetResponse(BaseModel):
@@ -88,11 +93,11 @@ class SetResponse(BaseModel):
     old_state: Optional[String]
     new_state: String
     created: Optional[Dict[Id, BaseDatatype]]
-    updated: Optional[Dict[Id, Optional[dict]]]
-    destroyed: Optional[Set[Id]]
+    updated: Optional[Dict[ObjectId, Optional[dict]]]
+    destroyed: Optional[Set[ObjectId]]
     not_created: Optional[Dict[Id, exceptions.SetError]]
-    not_updated: Optional[Dict[Id, exceptions.SetError]]
-    not_destroyed: Optional[Dict[Id, exceptions.SetError]]
+    not_updated: Optional[Dict[ObjectId, exceptions.SetError]]
+    not_destroyed: Optional[Dict[ObjectId, exceptions.SetError]]
 
 
 class CopyRequest(BaseModel):
@@ -122,7 +127,7 @@ class QueryRequest(GenericModel, Generic[FilterImpl, ComparatorImpl]):
     filter: Union[FilterOperator[FilterImpl], FilterImpl, None]
     sort: Optional[List[ComparatorImpl]]
     position: Int = Int(0)
-    anchor: Optional[Id]
+    anchor: Optional[ObjectId]
     anchor_offset: Int = Int(0)
     limit: Optional[UnsignedInt]  # XXX: shouldn't 0 be prohibited too?
     calculate_total: Boolean = False
@@ -134,7 +139,7 @@ class QueryResponse(BaseModel):
     query_state: String
     can_calculate_changes: Boolean
     position: UnsignedInt
-    ids: List[Id]
+    ids: List[ObjectId]
     total: Optional[UnsignedInt]
     limit: Optional[UnsignedInt]
 
@@ -146,14 +151,14 @@ class QueryChangesRequest(GenericModel, Generic[FilterImpl, ComparatorImpl]):
     sort: Optional[List[ComparatorImpl]]
     since_query_state: String
     max_changes: Optional[UnsignedInt]  # XXX: shouldn't 0 be prohibited too?
-    up_to_id: Optional[Id]
+    up_to_id: Optional[ObjectId]
     calculate_total: Boolean = False
 
 
 class AddedItem(BaseModel):
     "https://tools.ietf.org/html/rfc8620#section-5.6"
     index: UnsignedInt
-    id: Id
+    id: ObjectId
 
 
 class QueryChangesResponse(BaseModel):
@@ -162,7 +167,7 @@ class QueryChangesResponse(BaseModel):
     old_query_state: String
     new_query_state: String
     total: Optional[UnsignedInt]
-    removed: Set[Id]
+    removed: Set[ObjectId]
     added: List[AddedItem]
 
 
