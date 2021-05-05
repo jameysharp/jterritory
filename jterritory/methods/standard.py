@@ -187,29 +187,28 @@ class StandardMethods(Generic[FilterImpl, ComparatorImpl]):
     def internal_id(self) -> int:
         return crc32(self.type_name.encode())
 
-    def last_changed(self, ctx: Context, account_id: String) -> int:
+    def last_changed(self, ctx: Context, account: int) -> int:
         result = ctx.connection.scalar(
             select(func.max(models.objects.c.changed))
-            .join(models.accounts)
-            .where(models.accounts.c.account == account_id)
+            .where(models.objects.c.account == account)
             .where(models.objects.c.datatype == self.internal_id)
         )
         return result or 0
 
     def get(self, ctx: Context, request: GetRequest) -> None:
+        account = ctx.use_account(request.account_id)
         query = (
             select(
                 models.objects.c.id, models.objects.c.changed, models.objects.c.contents
             )
-            .join(models.accounts)
-            .where(models.accounts.c.account == request.account_id)
+            .where(models.objects.c.account == account)
             .where(models.objects.c.datatype == self.internal_id)
             .where(~models.objects.c.destroyed)
         )
 
         last_changed = 0
         if request.ids is not None:
-            last_changed = self.last_changed(ctx, request.account_id)
+            last_changed = self.last_changed(ctx, account)
             ids = [id for id in map(ObjectId.to_int, request.ids) if id is not None]
             query = query.where(models.objects.c.id.in_(ids))
 
@@ -296,8 +295,7 @@ class StandardMethods(Generic[FilterImpl, ComparatorImpl]):
                 models.objects.c.destroyed,
             )
             .order_by(models.objects.c.changed.desc())
-            .join(models.accounts)
-            .where(models.accounts.c.account == request.account_id)
+            .where(models.objects.c.account == ctx.use_account(request.account_id))
             .where(models.objects.c.datatype == self.internal_id)
             .where(or_(*spans))
         )
