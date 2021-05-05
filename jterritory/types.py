@@ -24,7 +24,7 @@ class BaseModel(PydanticBaseModel):
         # Change some defaults but allow callers to override:
         kwargs = {
             "by_alias": True,
-            "exclude_defaults": True,
+            "exclude_none": True,
             **kwargs,
         }
         return super().json(**kwargs)

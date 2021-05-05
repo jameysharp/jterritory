@@ -5,7 +5,7 @@ import re
 from sqlalchemy import select
 from sqlalchemy.future import Connection, Engine
 import typing
-from typing import Any, Callable, Dict, List, NamedTuple, Optional, Set, Type
+from typing import Any, Dict, List, NamedTuple, Optional, Set, Type, TypeVar
 from . import exceptions, models
 from .exceptions import method, request
 from .types import BaseModel, Id, JSONPointer, ObjectId, String
@@ -75,7 +75,7 @@ class Context:
                 name=name,
                 arguments=arguments.dict(
                     by_alias=True,
-                    exclude_defaults=True,
+                    exclude_none=True,
                 ),
                 call_id=self.call_id,
             )
@@ -144,10 +144,18 @@ class ResultReference(BaseModel):
         return result
 
 
+RequestModel = TypeVar("RequestModel", contravariant=True, bound=BaseModel)
+
+
+class Method(typing.Protocol[RequestModel]):
+    def __call__(self, ctx: Context, request: RequestModel) -> None:
+        ...
+
+
 @dataclass
 class Endpoint:
     capabilities: Set[str]
-    methods: Dict[str, Callable[[Context, BaseModel], None]]
+    methods: Dict[str, Method]
     engine: Engine
 
     def request(self, body: bytes) -> BaseModel:
