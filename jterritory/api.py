@@ -39,7 +39,7 @@ class Context:
     account_cache: Dict[Id, int] = field(default_factory=dict)
     created_ids: Dict[Id, Optional[ObjectId]] = field(default_factory=dict)
     method_responses: List[Invocation] = field(default_factory=list)
-    call_id: String = ""
+    call_id: String = String("")
 
     def use_account(
         self,
@@ -69,10 +69,10 @@ class Context:
             self.account_cache[account_id] = result
         return result
 
-    def add_response(self, name: String, arguments: BaseModel) -> None:
+    def add_response(self, name: str, arguments: BaseModel) -> None:
         self.method_responses.append(
             Invocation(
-                name=name,
+                name=String(name),
                 arguments=arguments.dict(
                     by_alias=True,
                     exclude_none=True,
@@ -154,7 +154,7 @@ class Method(typing.Protocol[RequestModel]):
 
 @dataclass
 class Endpoint:
-    capabilities: Set[str]
+    capabilities: Set[String]
     methods: Dict[str, Method]
     engine: Engine
 
@@ -228,5 +228,5 @@ class Endpoint:
         return Response(
             method_responses=ctx.method_responses,
             created_ids=created_ids,
-            session_state="TODO",
+            session_state=String("TODO"),
         )

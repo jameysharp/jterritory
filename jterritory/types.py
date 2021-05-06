@@ -36,7 +36,12 @@ class GenericModel(PydanticGenericModel):
 
 
 # https://tools.ietf.org/html/rfc8620#section-1.1
-String = StrictStr
+class String(StrictStr):
+    @classmethod
+    def validate(cls, value: str) -> "String":
+        return cls(value)
+
+
 Number = float  # XXX: want to allow int or float but not string
 Boolean = StrictBool
 
@@ -74,10 +79,6 @@ class JSONPointer(String):
         if v.startswith("/"):
             v = v[1:]
         return [token.replace("~1", "/").replace("~0", "~") for token in v.split("/")]
-
-    @classmethod
-    def validate(cls, value: str) -> "JSONPointer":
-        return cls(value)
 
 
 class ObjectId(Id):

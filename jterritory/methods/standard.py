@@ -228,7 +228,7 @@ class StandardMethods(Generic[FilterImpl, ComparatorImpl]):
                 last_changed = row.changed
 
         if request.properties is not None:
-            request.properties.add("id")
+            request.properties.add(String("id"))
             objects = [
                 {name: contents[name] for name in request.properties}
                 for contents in objects
@@ -236,7 +236,7 @@ class StandardMethods(Generic[FilterImpl, ComparatorImpl]):
 
         response = GetResponse(
             account_id=request.account_id,
-            state=str(last_changed),
+            state=String(last_changed),
             list=objects,
             not_found=not_found,
         )
@@ -353,7 +353,7 @@ class StandardMethods(Generic[FilterImpl, ComparatorImpl]):
         response = ChangesResponse(
             account_id=request.account_id,
             old_state=request.since_state,
-            new_state="-".join(str(state) for state in states),
+            new_state=String("-".join(str(state) for state in states)),
             has_more_changes=len(states) > 1,
             created=created,
             updated=updated,
