@@ -3,7 +3,7 @@ These methods should be supported by all JMAP servers and do not depend
 on which datatypes the server understands.
 """
 
-from typing import Dict, Optional, Set
+from typing import Any, Dict, Optional, Set
 from .. import exceptions
 from ..api import Context
 from ..types import BaseModel, Id, String, UnsignedInt
@@ -14,6 +14,12 @@ class Echo(BaseModel):
 
     class Config:
         extra = "allow"
+
+    def dict(self, **kwargs: Any) -> Dict[str, Any]:
+        # Core/echo is specified to return exactly what was passed to
+        # it, so in this specific case we must not exclude anything.
+        kwargs.update(exclude_none=False)
+        return super().dict(**kwargs)
 
 
 def echo(ctx: Context, request: Echo) -> None:

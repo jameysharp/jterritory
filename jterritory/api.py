@@ -221,7 +221,7 @@ class Endpoint:
                     print(exc)
                     ctx.add_response("error", method.ServerFail())
 
-        created_ids = {}
+        created_ids = None
         if parsed.created_ids is not None:
             created_ids = {k: v for k, v in ctx.created_ids.items() if v is not None}
 
