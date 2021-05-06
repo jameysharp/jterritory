@@ -75,6 +75,10 @@ class JSONPointer(String):
             v = v[1:]
         return [token.replace("~1", "/").replace("~0", "~") for token in v.split("/")]
 
+    @classmethod
+    def validate(cls, value: str) -> "JSONPointer":
+        return cls(value)
+
 
 class ObjectId(Id):
     """

@@ -2,6 +2,7 @@ from hypothesis import assume, event, given, strategies as st
 import json
 import pytest
 from sqlalchemy.future import create_engine
+from typing import Any, NamedTuple
 from jterritory.api import Endpoint, Invocation
 from jterritory.methods.core import echo
 
@@ -79,3 +80,89 @@ def test_preserves_created_ids(endpoint, created_ids):
         }
     ).encode()
     assert endpoint.request(body).created_ids == created_ids
+
+
+class RandomPointer(NamedTuple):
+    sample_json: Any
+    path: str
+    expect_list: bool
+
+    @st.composite
+    def strategy(draw) -> "RandomPointer":
+        path = draw(
+            st.lists(
+                st.integers(min_value=0, max_value=9) | st.just("*"),
+                min_size=1,
+                max_size=5,
+            )
+        )
+
+        strategy = draw(st.sampled_from((st.booleans(), st.integers())))
+
+        expect_list = False
+        if draw(st.booleans()):
+            strategy = st.lists(strategy)
+            expect_list = True
+
+        for token in reversed(path[1:]):
+            if draw(st.booleans()):
+                strategy = st.fixed_dictionaries({str(token): strategy})
+            elif isinstance(token, int):
+                strategy = RandomPointer.list_strategy(token, strategy)
+            else:
+                strategy = st.lists(strategy)
+                expect_list = True
+
+        strategy = st.fixed_dictionaries({str(path[0]): strategy})
+
+        return RandomPointer(
+            sample_json=draw(strategy),
+            path="/" + "/".join(map(str, path)),
+            expect_list=expect_list,
+        )
+
+    @staticmethod
+    def list_strategy(token: int, child):
+        def make(v):
+            def setter(l):
+                l[token] = v
+                return l
+
+            return st.lists(st.none(), min_size=token + 1).map(setter)
+
+        return child.flatmap(make)
+
+    def expected(self) -> Any:
+        def go(within: Any) -> None:
+            if isinstance(within, list):
+                for e in within:
+                    if e is not None:
+                        go(e)
+            elif isinstance(within, dict):
+                for e in within.values():
+                    go(e)
+            else:
+                leaves.append(within)
+
+        leaves = []
+        go(self.sample_json)
+        if self.expect_list:
+            return leaves
+        assert len(leaves) == 1
+        return leaves[0]
+
+
+@given(RandomPointer.strategy())
+def test_result_reference(endpoint, ptr: RandomPointer):
+    first_call = Invocation("Core/echo", ptr.sample_json, "first_call")
+    second_call = Invocation(
+        "Core/echo",
+        {"#result": {"result_of": "first_call", "name": "Core/echo", "path": ptr.path}},
+        "second_call",
+    )
+
+    body = json.dumps({"using": [], "methodCalls": [first_call, second_call]}).encode()
+    assert endpoint.request(body).method_responses == [
+        first_call,
+        Invocation("Core/echo", {"result": ptr.expected()}, "second_call"),
+    ]
