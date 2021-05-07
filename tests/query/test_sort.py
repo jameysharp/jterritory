@@ -1,4 +1,6 @@
-from hypothesis import given, strategies as st
+from hypothesis import given, infer, strategies as st
+from typing import List, Union
+from jterritory.types import String
 from jterritory.query.sort import Comparator
 
 
@@ -7,14 +9,14 @@ from jterritory.query.sort import Comparator
         st.lists(st.booleans()),
         st.lists(st.integers() | st.floats(allow_nan=False)),
     ),
-    reverse=st.booleans(),
+    reverse=infer,
 )
-def test_sortkey(l, reverse):
-    sort = Comparator(property="foo", is_ascending=not reverse).compile()
+def test_sortkey(l: Union[List[bool], List[Union[int, float]]], reverse: bool) -> None:
+    sort = Comparator(property=String("foo"), is_ascending=not reverse).compile()
     assert sorted(l, reverse=reverse) == sorted(l, key=sort.key)
 
 
-@given(l=st.lists(st.text()), reverse=st.booleans())
-def test_sortkey_strings(l, reverse):
-    sort = Comparator(property="foo", is_ascending=not reverse).compile()
+@given(l=infer, reverse=infer)
+def test_sortkey_strings(l: List[str], reverse: bool) -> None:
+    sort = Comparator(property=String("foo"), is_ascending=not reverse).compile()
     assert sorted(l, key=str.casefold, reverse=reverse) == sorted(l, key=sort.key)

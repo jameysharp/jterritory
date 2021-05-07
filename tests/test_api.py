@@ -1,9 +1,10 @@
-from hypothesis import assume, event, given, strategies as st
+from hypothesis import assume, event, given, infer, strategies as st
 import json
 import pytest
 from sqlalchemy.future import create_engine
-from typing import Any, NamedTuple
-from jterritory.api import Endpoint, Invocation
+from typing import Any, cast, Dict, List, NamedTuple, Optional, Protocol, TypeVar
+from jterritory.api import Endpoint, Invocation, Response
+from jterritory.types import Id, String
 from jterritory.methods.core import echo
 
 st_json = st.recursive(
@@ -18,11 +19,6 @@ st_json = st.recursive(
         st.dictionaries(st.text(), children, max_size=5),
     ),
 )
-st_id = st.text(
-    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_",
-    min_size=1,
-    max_size=255,
-)
 st_invocations = st.lists(
     st.builds(
         Invocation,
@@ -35,7 +31,7 @@ st_invocations = st.lists(
 
 
 @pytest.fixture(scope="module")
-def endpoint():
+def endpoint() -> Endpoint:
     return Endpoint(
         capabilities=set(),
         methods={"Core/echo": echo},
@@ -43,8 +39,8 @@ def endpoint():
     )
 
 
-@given(st.binary())
-def test_not_json(endpoint, body):
+@given(body=infer)
+def test_not_json(endpoint: Endpoint, body: bytes) -> None:
     try:
         json.loads(body.decode())
     except (UnicodeDecodeError, json.JSONDecodeError):
@@ -57,7 +53,7 @@ def test_not_json(endpoint, body):
 
 
 @given(st_json)
-def test_not_request(endpoint, data):
+def test_not_request(endpoint: Endpoint, data: Any) -> None:
     body = json.dumps(data).encode()
     assert (
         endpoint.request(body).dict()["type"] == "urn:ietf:params:jmap:error:notRequest"
@@ -65,13 +61,19 @@ def test_not_request(endpoint, data):
 
 
 @given(st_invocations, st.none() | st.just(2))
-def test_echo(endpoint, calls, indent):
+def test_echo(
+    endpoint: Endpoint, calls: List[Invocation], indent: Optional[int]
+) -> None:
     body = json.dumps({"using": [], "methodCalls": calls}, indent=indent).encode()
-    assert endpoint.request(body).method_responses == calls
+    response = endpoint.request(body)
+    assert isinstance(response, Response)
+    assert response.method_responses == calls
 
 
-@given(st.none() | st.dictionaries(st_id, st_id))
-def test_preserves_created_ids(endpoint, created_ids):
+@given(created_ids=infer)
+def test_preserves_created_ids(
+    endpoint: Endpoint, created_ids: Optional[Dict[Id, Id]]
+) -> None:
     body = json.dumps(
         {
             "using": [],
@@ -79,7 +81,17 @@ def test_preserves_created_ids(endpoint, created_ids):
             "createdIds": created_ids,
         }
     ).encode()
-    assert endpoint.request(body).created_ids == created_ids
+    response = endpoint.request(body)
+    assert isinstance(response, Response)
+    assert response.created_ids == created_ids
+
+
+T = TypeVar("T")
+
+
+class DrawProtocol(Protocol):
+    def __call__(self, base: st.SearchStrategy[T]) -> T:
+        ...
 
 
 class RandomPointer(NamedTuple):
@@ -88,7 +100,8 @@ class RandomPointer(NamedTuple):
     expect_list: bool
 
     @st.composite
-    def strategy(draw) -> "RandomPointer":
+    @staticmethod
+    def strategy(draw: DrawProtocol) -> "RandomPointer":
         path = draw(
             st.lists(
                 st.integers(min_value=0, max_value=9) | st.just("*"),
@@ -97,7 +110,9 @@ class RandomPointer(NamedTuple):
             )
         )
 
-        strategy = draw(st.sampled_from((st.booleans(), st.integers())))
+        strategy: st.SearchStrategy[Any] = draw(
+            st.sampled_from((st.booleans(), st.integers()))
+        )
 
         expect_list = False
         if draw(st.booleans()):
@@ -122,9 +137,15 @@ class RandomPointer(NamedTuple):
         )
 
     @staticmethod
-    def list_strategy(token: int, child):
-        def make(v):
-            def setter(l):
+    def list_strategy(
+        token: int, child: st.SearchStrategy[T]
+    ) -> st.SearchStrategy[List[Optional[T]]]:
+        def make(v: T) -> st.SearchStrategy[List[Optional[T]]]:
+            def setter(empty: List[None]) -> List[Optional[T]]:
+                # Normally unsafe, but in this case the caller never
+                # accesses the `empty` list again, so it's okay to write
+                # a different type into it.
+                l = cast(List[Optional[T]], empty)
                 l[token] = v
                 return l
 
@@ -144,7 +165,7 @@ class RandomPointer(NamedTuple):
             else:
                 leaves.append(within)
 
-        leaves = []
+        leaves: List[Any] = []
         go(self.sample_json)
         if self.expect_list:
             return leaves
@@ -152,17 +173,24 @@ class RandomPointer(NamedTuple):
         return leaves[0]
 
 
-@given(RandomPointer.strategy())
-def test_result_reference(endpoint, ptr: RandomPointer):
-    first_call = Invocation("Core/echo", ptr.sample_json, "first_call")
+st.register_type_strategy(RandomPointer, RandomPointer.strategy())
+
+
+@given(ptr=infer)
+def test_result_reference(endpoint: Endpoint, ptr: RandomPointer) -> None:
+    first_call = Invocation(String("Core/echo"), ptr.sample_json, String("first_call"))
     second_call = Invocation(
-        "Core/echo",
+        String("Core/echo"),
         {"#result": {"result_of": "first_call", "name": "Core/echo", "path": ptr.path}},
-        "second_call",
+        String("second_call"),
     )
 
     body = json.dumps({"using": [], "methodCalls": [first_call, second_call]}).encode()
-    assert endpoint.request(body).method_responses == [
+    response = endpoint.request(body)
+    assert isinstance(response, Response)
+    assert response.method_responses == [
         first_call,
-        Invocation("Core/echo", {"result": ptr.expected()}, "second_call"),
+        Invocation(
+            String("Core/echo"), {"result": ptr.expected()}, String("second_call")
+        ),
     ]

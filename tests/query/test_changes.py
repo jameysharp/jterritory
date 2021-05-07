@@ -1,17 +1,18 @@
 from hypothesis import given, note, strategies as st
+from typing import List
 from jterritory.query.changes import Changes
 from jterritory.types import ObjectId
 
 
-def objectId(size=10):
+def objectId(size: int = 10) -> st.SearchStrategy[ObjectId]:
     return st.integers(0, size - 1).map(ObjectId)
 
 
-def query(size=10):
+def query(size: int = 10) -> st.SearchStrategy[List[ObjectId]]:
     return st.lists(objectId(), max_size=size, unique=True)
 
 
-def patch(old, diff):
+def patch(old: List[ObjectId], diff: Changes) -> List[ObjectId]:
     """
     Naive implementation of the specification for applying /queryChanges
     results. Do not use this on large lists, because it's O(n^2).
@@ -33,33 +34,33 @@ def patch(old, diff):
 
 
 @given(query(), query())
-def test_diff(old, new):
+def test_diff(old: List[ObjectId], new: List[ObjectId]) -> None:
     diff = Changes.diff(old, new)
     assert patch(old, diff) == new
 
 
 @given(query(), query())
-def test_diff_reverse(old, new):
+def test_diff_reverse(old: List[ObjectId], new: List[ObjectId]) -> None:
     diff = Changes.diff(new, old).reverse()
     assert patch(old, diff) == new
 
 
 @given(query(), query())
-def test_merge_left_identity(old, new):
+def test_merge_left_identity(old: List[ObjectId], new: List[ObjectId]) -> None:
     diff = Changes.diff(old, new)
     empty = Changes([], [])
     assert empty.merge(diff) == diff
 
 
 @given(query(), query())
-def test_merge_right_identity(old, new):
+def test_merge_right_identity(old: List[ObjectId], new: List[ObjectId]) -> None:
     diff = Changes.diff(old, new)
     empty = Changes([], [])
     assert diff.merge(empty) == diff
 
 
 @given(query(), query(), query())
-def test_merge(a, b, c):
+def test_merge(a: List[ObjectId], b: List[ObjectId], c: List[ObjectId]) -> None:
     diff1 = Changes.diff(a, b)
     note(f"diff(a, b) == {diff1}")
     diff2 = Changes.diff(b, c)
@@ -74,7 +75,9 @@ def test_merge(a, b, c):
 
 
 @given(query(), query(), query(), query())
-def test_merge_associative(a, b, c, d):
+def test_merge_associative(
+    a: List[ObjectId], b: List[ObjectId], c: List[ObjectId], d: List[ObjectId]
+) -> None:
     diff1 = Changes.diff(a, b)
     note(f"diff(a, b) == {diff1}")
     diff2 = Changes.diff(b, c)
