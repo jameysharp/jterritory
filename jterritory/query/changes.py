@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from bisect import bisect_left
 from typing import Iterable, List, NamedTuple, Sequence
 from ..types import ObjectId, ObjectPosition
@@ -15,7 +17,7 @@ class Changes(NamedTuple):
     added: Sequence[ObjectPosition]
 
     @classmethod
-    def diff(cls, old: Sequence[ObjectId], new: Sequence[ObjectId]) -> "Changes":
+    def diff(cls, old: Sequence[ObjectId], new: Sequence[ObjectId]) -> Changes:
         byId = {objectId: idx for idx, objectId in enumerate(old)}
 
         # If the sort order changed for this query, we have to remove
@@ -63,7 +65,7 @@ class Changes(NamedTuple):
         removed = sorted(ObjectPosition(v, k) for k, v in byId.items())
         return cls(added=added, removed=removed)
 
-    def merge(self, other: "Changes") -> "Changes":
+    def merge(self, other: Changes) -> Changes:
         # Initially we have four sequences of changes that are logically
         # supposed to be applied in this order:
         # 1. self.removed
@@ -124,10 +126,10 @@ class Changes(NamedTuple):
             added=MergeHelper.merge(other.added, tmpadd),
         )
 
-    def reverse(self) -> "Changes":
+    def reverse(self) -> Changes:
         return Changes(removed=self.added, added=self.removed)
 
-    def upTo(self, length: int) -> "Changes":
+    def upTo(self, length: int) -> Changes:
         removeTo = bisect_left(
             self.removed,
             ObjectPosition(length, ObjectId(0)),
@@ -155,7 +157,7 @@ class MergeHelper:
     def __bool__(self) -> bool:
         return self.obj is not None
 
-    def __lt__(self, other: "MergeHelper") -> bool:
+    def __lt__(self, other: MergeHelper) -> bool:
         if self.obj is None:
             return False
         if other.obj is None:

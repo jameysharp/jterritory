@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from pydantic.main import ModelMetaclass
 from typing import ClassVar, Literal, Optional, no_type_check
 from jterritory.types import BaseModel

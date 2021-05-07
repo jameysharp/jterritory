@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from pydantic import ConstrainedInt, ConstrainedStr, StrictBool, StrictStr
 from pydantic import BaseModel as PydanticBaseModel
 from pydantic.generics import GenericModel as PydanticGenericModel
@@ -15,7 +17,7 @@ class BaseModel(PydanticBaseModel):
             return "".join(words[:1] + [word.capitalize() for word in words[1:]])
 
         @staticmethod
-        def schema_extra(schema: Dict[str, Any], model: Type["BaseModel"]) -> None:
+        def schema_extra(schema: Dict[str, Any], model: Type[BaseModel]) -> None:
             props = schema["properties"]
             for field in model.__fields__.values():
                 props[field.alias]["title"] = field.name.replace("_", " ").capitalize()
@@ -38,7 +40,7 @@ class GenericModel(PydanticGenericModel):
 # https://tools.ietf.org/html/rfc8620#section-1.1
 class String(StrictStr):
     @classmethod
-    def validate(cls, value: str) -> "String":
+    def validate(cls, value: str) -> String:
         return cls(value)
 
 
@@ -88,7 +90,7 @@ class ObjectId(Id):
     """
 
     @classmethod
-    def from_int(cls, value: int) -> "ObjectId":
+    def from_int(cls, value: int) -> ObjectId:
         return cls(f"o{value}")
 
     def to_int(self) -> Optional[int]:
@@ -104,7 +106,7 @@ class ObjectPosition(NamedTuple):
     position: int
     objectId: ObjectId
 
-    def offset(self, offset: int) -> "ObjectPosition":
+    def offset(self, offset: int) -> ObjectPosition:
         if not offset:
             return self
         return self._replace(position=self.position + offset)

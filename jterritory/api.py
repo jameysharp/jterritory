@@ -1,3 +1,7 @@
+# FIXME: Pydantic seems broken under `from __future__ import
+# annotations` when using a `NamedTuple` as a field in a Pydantic model
+# https://github.com/samuelcolvin/pydantic/issues/2760
+
 from dataclasses import dataclass, field
 import json
 from pydantic import ValidationError

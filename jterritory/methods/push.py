@@ -2,6 +2,8 @@
 https://tools.ietf.org/html/rfc8620#section-7
 """
 
+from __future__ import annotations
+
 from pydantic import Field
 from typing import Any, Dict, List, Literal, Optional, Set
 from .. import exceptions

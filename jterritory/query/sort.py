@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from sqlalchemy.sql import ClauseElement
 from typing import Any, Callable, NamedTuple, Optional, Tuple, TypeVar
 from .. import models
@@ -16,7 +18,7 @@ class TypedKey(NamedTuple):
             raise method.UnsupportedSort().exception()
         return self.obj < other.obj
 
-    def descending(self) -> "Reverse":
+    def descending(self) -> Reverse:
         return Reverse(self.compatible, self.obj)
 
 
@@ -54,7 +56,7 @@ class SortKey(NamedTuple):
     column: ClauseElement
     key: Callable[[Any], TypedKey] = autoKey
 
-    def descending(self) -> "SortKey":
+    def descending(self) -> SortKey:
         key = self.key
         return self._replace(key=lambda x: key(x).descending())
 

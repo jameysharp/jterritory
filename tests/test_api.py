@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from hypothesis import assume, event, given, infer, strategies as st
 import json
 import pytest
@@ -101,7 +103,7 @@ class RandomPointer(NamedTuple):
 
     @st.composite
     @staticmethod
-    def strategy(draw: DrawProtocol) -> "RandomPointer":
+    def strategy(draw: DrawProtocol) -> RandomPointer:
         path = draw(
             st.lists(
                 st.integers(min_value=0, max_value=9) | st.just("*"),

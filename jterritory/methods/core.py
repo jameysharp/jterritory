@@ -3,6 +3,8 @@ These methods should be supported by all JMAP servers and do not depend
 on which datatypes the server understands.
 """
 
+from __future__ import annotations
+
 from typing import Any, Dict, Optional, Set
 from .. import exceptions
 from ..api import Context

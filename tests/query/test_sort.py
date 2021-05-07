@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from hypothesis import given, infer, strategies as st
 from typing import List, Union
 from jterritory.types import String

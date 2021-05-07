@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from sqlalchemy import Column, MetaData, Table
 from sqlalchemy import Boolean, Integer, JSON, Text
 from sqlalchemy import ForeignKey, UniqueConstraint

@@ -13,6 +13,8 @@ MUST specify which methods are available for the type.'
 https://tools.ietf.org/html/rfc8620#section-5
 """
 
+from __future__ import annotations
+
 from itertools import islice
 import re
 from sqlalchemy import func, select, and_, or_

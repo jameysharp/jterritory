@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from hypothesis import given, note, strategies as st
 from typing import List
 from jterritory.query.changes import Changes

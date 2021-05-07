@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from sqlalchemy import and_, not_, or_
 from sqlalchemy.sql import ColumnElement
 from typing import Generic, List, Literal, TypeVar, Union
@@ -15,7 +17,7 @@ FilterImpl = TypeVar("FilterImpl", bound=FilterCondition)
 
 class FilterOperator(GenericModel, Generic[FilterImpl]):
     operator: Literal["AND", "OR", "NOT"]
-    conditions: "List[Union[FilterOperator[FilterImpl], FilterImpl]]"
+    conditions: List[Union[FilterOperator[FilterImpl], FilterImpl]]
 
     def compile(self) -> ColumnElement:
         clauses = [condition.compile() for condition in self.conditions]
