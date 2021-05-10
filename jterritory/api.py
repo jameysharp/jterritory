@@ -168,9 +168,16 @@ class Endpoint:
         except (UnicodeDecodeError, json.JSONDecodeError) as exc:
             return request.NotJSON(detail=str(exc))
 
+        # Pydantic tries to interpret lists as dictionaries, which I
+        # don't want. That behavior also allows clients to trigger
+        # https://github.com/samuelcolvin/pydantic/issues/2762, though
+        # this check isn't sufficient to block all cases of that issue.
+        if not isinstance(raw_request, dict):
+            return request.NotRequest(detail="JSON root is not an object")
+
         try:
             parsed = Request.parse_obj(raw_request)
-        except ValidationError as exc:
+        except (ValidationError, TypeError) as exc:
             return request.NotRequest(detail=str(exc))
 
         unknown = parsed.using - self.capabilities

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from hypothesis import assume, event, given, infer, strategies as st
+from hypothesis import assume, event, example, given, infer, strategies as st
 import json
 import pytest
 from sqlalchemy.future import create_engine
@@ -55,6 +55,9 @@ def test_not_json(endpoint: Endpoint, body: bytes) -> None:
 
 
 @given(st_json)
+# https://github.com/samuelcolvin/pydantic/issues/2762:
+@example([[None, None]])
+@example({"__pydantic_self__": None})
 def test_not_request(endpoint: Endpoint, data: Any) -> None:
     body = json.dumps(data).encode()
     assert (
