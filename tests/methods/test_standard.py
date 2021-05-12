@@ -260,7 +260,10 @@ class ConsistentHistory(stateful.RuleBasedStateMachine):
 
 # This test takes time quadratic in the number of steps but tests a lot
 # in each step, so let's keep the number of steps pretty small.
-ConsistentHistory.TestCase.settings = settings(stateful_step_count=5)
+ConsistentHistory.TestCase.settings = settings(
+    stateful_step_count=5,
+    deadline=None,
+)
 ConsistentHistoryTestCase = ConsistentHistory.TestCase
 
 

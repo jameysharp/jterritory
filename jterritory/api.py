@@ -161,15 +161,20 @@ class Method(typing.Protocol[RequestModel]):
 def serializable(f: Method[RequestModel]) -> Method[RequestModel]:
     @wraps(f)
     def wrapper(ctx: Context, request: RequestModel) -> None:
-        # TODO: appropriate magic for sqlite/pg to start a serializable
-        # transaction
+        dialect = ctx.connection.engine.name
+        if dialect == "sqlite":
+            ctx.connection.exec_driver_sql("BEGIN IMMEDIATE")
+        elif dialect == "postgresql":
+            ctx.connection.exec_driver_sql("BEGIN ISOLATION LEVEL SERIALIZABLE")
+        else:
+            raise NotImplementedError(f"unsupported database: {dialect!r}")
         try:
             f(ctx, request)
         except Exception:
-            ctx.connection.rollback()
+            ctx.connection.exec_driver_sql("ROLLBACK")
             raise
         else:
-            ctx.connection.commit()
+            ctx.connection.exec_driver_sql("COMMIT")
 
     return wrapper
 
@@ -179,6 +184,9 @@ class Endpoint:
     capabilities: Set[String]
     methods: Dict[str, Method]
     engine: Engine
+
+    def __post_init__(self) -> None:
+        self.engine = self.engine.execution_options(isolation_level="AUTOCOMMIT")
 
     def request(self, body: bytes) -> BaseModel:
         try:
