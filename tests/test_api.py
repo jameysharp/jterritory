@@ -4,7 +4,7 @@ from hypothesis import assume, event, example, given, infer, strategies as st
 import json
 import pytest
 from sqlalchemy.future import create_engine
-from typing import Any, cast, Dict, List, NamedTuple, Optional, Protocol, TypeVar
+from typing import Any, Dict, List, NamedTuple, Optional, Protocol, TypeVar
 from jterritory.api import Endpoint, Invocation, Response
 from jterritory.types import Id, String
 from jterritory.methods.core import echo
@@ -58,7 +58,7 @@ def test_not_json(endpoint: Endpoint, body: bytes) -> None:
     assert endpoint.request(body).dict()["type"] == "urn:ietf:params:jmap:error:notJSON"
 
 
-@given(st_json(8))
+@given(st_json(6))
 # https://github.com/samuelcolvin/pydantic/issues/2762:
 @example([[None, None]])
 @example({"__pydantic_self__": None})
@@ -149,18 +149,12 @@ class RandomPointer(NamedTuple):
     def list_strategy(
         token: int, child: st.SearchStrategy[T]
     ) -> st.SearchStrategy[List[Optional[T]]]:
-        def make(v: T) -> st.SearchStrategy[List[Optional[T]]]:
-            def setter(empty: List[None]) -> List[Optional[T]]:
-                # Normally unsafe, but in this case the caller never
-                # accesses the `empty` list again, so it's okay to write
-                # a different type into it.
-                l = cast(List[Optional[T]], empty)
-                l[token] = v
-                return l
+        def make(v: T) -> List[Optional[T]]:
+            l: List[Optional[T]] = [None] * token
+            l.append(v)
+            return l
 
-            return st.lists(st.none(), min_size=token + 1).map(setter)
-
-        return child.flatmap(make)
+        return child.map(make)
 
     def expected(self) -> Any:
         def go(within: Any) -> None:
