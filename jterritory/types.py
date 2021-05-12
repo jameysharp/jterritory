@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from pydantic import ConstrainedInt, ConstrainedStr, StrictBool, StrictStr
+from pydantic import ConstrainedInt, StrictBool, StrictStr
 from pydantic import BaseModel as PydanticBaseModel
 from pydantic.generics import GenericModel as PydanticGenericModel
 import re
@@ -48,9 +48,8 @@ Number = float  # XXX: want to allow int or float but not string
 Boolean = StrictBool
 
 
-class Id(ConstrainedStr):
+class Id(String):
     "https://tools.ietf.org/html/rfc8620#section-1.2"
-    strict = True
     min_length = 1
     max_length = 255
     regex = re.compile(r"^[A-Za-z0-9_-]*$")
