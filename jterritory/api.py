@@ -3,11 +3,13 @@
 # https://github.com/samuelcolvin/pydantic/issues/2760
 
 from dataclasses import dataclass, field
+from functools import wraps
 import json
 from pydantic import ValidationError
 import re
 from sqlalchemy import select
 from sqlalchemy.future import Connection, Engine
+from traceback import print_exc
 import typing
 from typing import Any, Dict, List, NamedTuple, Optional, Set, Type, TypeVar
 from . import exceptions, models
@@ -41,7 +43,7 @@ class Context:
     "Stores any number of responses from a single method call."
     connection: Connection
     account_cache: Dict[Id, int] = field(default_factory=dict)
-    created_ids: Dict[Id, Optional[ObjectId]] = field(default_factory=dict)
+    created_ids: Dict[Id, ObjectId] = field(default_factory=dict)
     method_responses: List[Invocation] = field(default_factory=list)
     call_id: String = String("")
 
@@ -156,6 +158,22 @@ class Method(typing.Protocol[RequestModel]):
         ...
 
 
+def serializable(f: Method[RequestModel]) -> Method[RequestModel]:
+    @wraps(f)
+    def wrapper(ctx: Context, request: RequestModel) -> None:
+        # TODO: appropriate magic for sqlite/pg to start a serializable
+        # transaction
+        try:
+            f(ctx, request)
+        except Exception:
+            ctx.connection.rollback()
+            raise
+        else:
+            ctx.connection.commit()
+
+    return wrapper
+
+
 @dataclass
 class Endpoint:
     capabilities: Set[String]
@@ -188,8 +206,7 @@ class Endpoint:
             ctx = Context(connection=connection)
 
             if parsed.created_ids:
-                for name, object_id in parsed.created_ids.items():
-                    ctx.created_ids[name] = object_id
+                ctx.created_ids = parsed.created_ids
 
             for invocation in parsed.method_calls:
                 ctx.call_id = invocation.call_id
@@ -227,14 +244,14 @@ class Endpoint:
                     handler(ctx, arguments)
                 except exceptions.MethodException as exc:
                     ctx.add_response("error", exc.args[0])
-                except Exception as exc:
+                except Exception:
                     # TODO: log these exceptions
-                    print(exc)
+                    print_exc()
                     ctx.add_response("error", method.ServerFail())
 
         created_ids = None
         if parsed.created_ids is not None:
-            created_ids = {k: v for k, v in ctx.created_ids.items() if v is not None}
+            created_ids = ctx.created_ids
 
         return Response(
             method_responses=ctx.method_responses,
