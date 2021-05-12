@@ -9,23 +9,27 @@ from jterritory.api import Endpoint, Invocation, Response
 from jterritory.types import Id, String
 from jterritory.methods.core import echo
 
-st_json = st.recursive(
-    st.one_of(
-        st.none(),
-        st.booleans(),
-        st.floats(allow_infinity=False, allow_nan=False),
-        st.text(),
-    ),
-    lambda children: st.one_of(
-        st.lists(children, max_size=5),
-        st.dictionaries(st.text(), children, max_size=5),
-    ),
-)
+
+def st_json(max_size: int) -> st.SearchStrategy[object]:
+    return st.recursive(
+        st.one_of(
+            st.none(),
+            st.booleans(),
+            st.floats(allow_infinity=False, allow_nan=False),
+            st.text(),
+        ),
+        lambda children: st.one_of(
+            st.lists(children, max_size=max_size),
+            st.dictionaries(st.text(), children, max_size=max_size),
+        ),
+    )
+
+
 st_invocations = st.lists(
     st.builds(
         Invocation,
         st.just("Core/echo"),
-        st.dictionaries(st.text().filter(lambda k: not k.startswith("#")), st_json),
+        st.dictionaries(st.text().filter(lambda k: not k.startswith("#")), st_json(3)),
         st.text(),
     ),
     max_size=5,
@@ -54,7 +58,7 @@ def test_not_json(endpoint: Endpoint, body: bytes) -> None:
     assert endpoint.request(body).dict()["type"] == "urn:ietf:params:jmap:error:notJSON"
 
 
-@given(st_json)
+@given(st_json(8))
 # https://github.com/samuelcolvin/pydantic/issues/2762:
 @example([[None, None]])
 @example({"__pydantic_self__": None})
