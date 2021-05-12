@@ -1,7 +1,7 @@
 from hypothesis import settings, stateful, strategies as st
 import json
 from jterritory import models
-from jterritory.api import Endpoint, Response, serializable
+from jterritory.api import Endpoint, Response
 from jterritory.exceptions import method, seterror
 from jterritory.methods.standard import BaseDatatype, SetRequest, StandardMethods
 from jterritory.query.filter import FilterCondition
@@ -64,14 +64,10 @@ class ConsistentHistory(stateful.RuleBasedStateMachine):
         self.live: Dict[str, dict] = {}
         self.dead: Set[str] = set()
 
-        methods = SampleMethods()
+        sample = SampleMethods()
         self.endpoint = Endpoint(
             capabilities={self.CAPABILITY},
-            methods={
-                "Sample/get": methods.get,
-                "Sample/changes": methods.changes,
-                "Sample/set": serializable(methods.set),
-            },
+            methods=sample.methods(),
             engine=create_engine("sqlite://", echo=False),
         )
 

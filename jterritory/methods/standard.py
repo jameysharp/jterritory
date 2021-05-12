@@ -25,7 +25,7 @@ import typing
 from typing import Any, Dict, Generic, List, Mapping, Optional, Set, Tuple, Type, Union
 from zlib import crc32
 from .. import exceptions, models
-from ..api import Context
+from ..api import Context, Method, serializable
 from ..exceptions import method, seterror
 from ..query.filter import FilterImpl, FilterOperator
 from ..query.sort import ComparatorImpl
@@ -176,6 +176,14 @@ class QueryChangesResponse(BaseModel):
 
 class StandardMethods(Generic[FilterImpl, ComparatorImpl]):
     datatype: Type[BaseDatatype]
+
+    def methods(self) -> Dict[str, Method]:
+        base = self.type_name
+        return {
+            base + "/get": self.get,
+            base + "/changes": self.changes,
+            base + "/set": serializable(self.set),
+        }
 
     @property
     def query_types(self) -> Tuple[Type[FilterImpl], Type[ComparatorImpl]]:
