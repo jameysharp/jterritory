@@ -1,4 +1,4 @@
-from hypothesis import settings, stateful, strategies as st
+from hypothesis import assume, settings, stateful, strategies as st
 import json
 from jterritory import models
 from jterritory.api import Endpoint, Response
@@ -261,6 +261,19 @@ class ConsistentHistory(stateful.RuleBasedStateMachine):
                 destroyed=frozenset(destroyed),
             )
         )
+
+    @stateful.rule(bad_state=st.text())  # type: ignore
+    def state_mismatch(self, bad_state: str) -> None:
+        assume(bad_state != self.states[-1].state)
+        call = (
+            "Sample/set",
+            {"accountId": self.ACCOUNT_ID, "ifInState": bad_state},
+            "bad-set",
+        )
+        response = self.submit([call])
+        assert response.method_responses == [
+            ("error", {"type": "stateMismatch"}, "bad-set"),
+        ]
 
 
 # This test takes time quadratic in the number of steps but tests a lot
