@@ -28,7 +28,7 @@ from .. import exceptions, models
 from ..api import Context, Method, serializable
 from ..exceptions import method, seterror
 from ..query.filter import FilterImpl, FilterOperator
-from ..query.sort import ComparatorImpl
+from ..query.sort import ComparatorImpl, SortKey, numberKey
 from ..types import BaseModel, GenericModel, ObjectId
 from ..types import Boolean, Id, Int, JSONPointer, PositiveInt, String, UnsignedInt
 
@@ -183,6 +183,7 @@ class StandardMethods(Generic[FilterImpl, ComparatorImpl]):
             base + "/get": self.get,
             base + "/changes": self.changes,
             base + "/set": serializable(self.set),
+            base + "/query": self.query,
         }
 
     @property
@@ -441,6 +442,85 @@ class StandardMethods(Generic[FilterImpl, ComparatorImpl]):
             not_destroyed=helper.not_destroyed or None,
         )
         ctx.add_response(f"{self.type_name}/set", response)
+
+    def query(
+        self, ctx: Context, request: QueryRequest[FilterImpl, ComparatorImpl]
+    ) -> None:
+        account = ctx.use_account(request.account_id)
+
+        # Since object IDs are unique, if the sort criteria include the
+        # "id" property then we can discard all later criteria.
+        # Otherwise, implicitly add the "id" property to ensure a stable
+        # sort order. This also means that the last selected column is
+        # always the object ID, which is what we need to return.
+        order = []
+        for comparator in request.sort or []:
+            key = comparator.compile()
+            order.append(key)
+            if key.column is models.objects.c.id:
+                break
+        else:
+            order.append(SortKey(models.objects.c.id, key=numberKey))
+
+        # Queries are always implicitly filtered to exclude objects
+        # which have been destroyed, in addition to any filter the
+        # client specified.
+        criteria = ~models.objects.c.destroyed
+        if request.filter is not None:
+            criteria = and_(criteria, request.filter.compile())
+
+        columns: List[ClauseElement] = [models.objects.c.changed]
+        columns.extend(key.column for key in order)
+        query = select(*columns).where(
+            models.objects.c.account == account,
+            models.objects.c.datatype == self.internal_id,
+            criteria,
+        )
+
+        last_changed = self.last_changed(ctx, account)
+        rows = []
+        for row in ctx.connection.execute(query):
+            it = iter(row)
+
+            changed = next(it)
+            if last_changed < changed:
+                last_changed = changed
+
+            rows.append(tuple(k.key(x) for k, x in zip(order, it)))
+
+        rows.sort()
+        objects = [ObjectId.from_int(row[-1].obj) for row in rows]
+
+        start: int = request.position
+        if request.anchor is not None:
+            try:
+                start = objects.index(request.anchor) + request.anchor_offset
+            except ValueError as exc:
+                raise method.AnchorNotFound().exception() from exc
+        elif start < 0:
+            # Negative anchorOffsets don't wrap around the end of the
+            # list, so this adjustment must not be applied when an
+            # anchor is being used.
+            start += len(objects)
+
+        if start < 0:
+            start = 0
+
+        if request.limit is None:
+            end = len(objects)
+        else:
+            end = start + request.limit
+
+        response = QueryResponse(
+            account_id=request.account_id,
+            query_state=String(last_changed),
+            can_calculate_changes=False,
+            position=UnsignedInt(start),
+            ids=objects[start:end],
+            total=UnsignedInt(len(objects)) if request.calculate_total else None,
+            limit=None,
+        )
+        ctx.add_response(f"{self.type_name}/query", response)
 
 
 @dataclass

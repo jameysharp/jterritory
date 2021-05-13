@@ -1,11 +1,13 @@
+from __future__ import annotations
+
 from hypothesis import assume, settings, stateful, strategies as st
 import json
 from jterritory import models
-from jterritory.api import Endpoint, Response
+from jterritory.api import Endpoint, Invocation, Response
 from jterritory.exceptions import method
 from jterritory.methods.standard import BaseDatatype, SetRequest, StandardMethods
 from jterritory.query.filter import FilterCondition
-from jterritory.query.sort import Comparator
+from jterritory.query.sort import autoKey, Comparator, TypedKey
 from jterritory.types import Id, Number, ObjectId, String
 from pydantic.json import pydantic_encoder
 from sqlalchemy.future import create_engine
@@ -17,7 +19,9 @@ from typing import (
     List,
     Literal,
     NamedTuple,
+    Optional,
     Protocol,
+    Sequence,
     Set,
     Tuple,
     TypeVar,
@@ -29,6 +33,51 @@ class Sample(BaseDatatype):
     text: String
 
 
+class SampleComparator(Comparator):
+    @classmethod
+    def id(cls) -> SampleComparator:
+        return cls(property=String("id"))
+
+    def key(self, obj: dict) -> TypedKey:
+        value = obj[self.property]
+        if self.property == "id":
+            value = ObjectId(value).to_int()
+        key = autoKey(value)
+        if not self.is_ascending:
+            key = key.descending()
+        return key
+
+
+class SampleFilter(FilterCondition):
+    number_is: Literal["<", "=", ">"]
+    value: Number
+
+    def compile(self) -> ClauseElement:
+        column = models.objects.c.contents
+        column = column["number"].as_float()  # type: ignore
+        if self.number_is == "<":
+            return column < self.value
+        if self.number_is == "=":
+            return column == self.value
+        if self.number_is == ">":
+            return column > self.value
+        raise method.UnsupportedFilter().exception()
+
+    def matches(self, obj: dict) -> bool:
+        number = obj["number"]
+        if self.number_is == "<":
+            return number < self.value
+        if self.number_is == "=":
+            return number == self.value
+        if self.number_is == ">":
+            return number > self.value
+        raise AssertionError(f"unknown operator {self.number_is!r}")
+
+
+class SampleMethods(StandardMethods[SampleFilter, SampleComparator]):
+    datatype = Sample
+
+
 st.register_type_strategy(
     Sample,
     st.builds(
@@ -38,12 +87,32 @@ st.register_type_strategy(
     ),
 )
 
+st.register_type_strategy(
+    SampleComparator,
+    st.builds(
+        SampleComparator,
+        property=st.sampled_from(["id", "number", "text"]),
+        is_ascending=st.booleans(),
+    ),
+)
+
+
+st.register_type_strategy(
+    SampleFilter,
+    st.builds(
+        SampleFilter,
+        number_is=st.sampled_from(["<", ">"]),
+        value=st.floats(allow_infinity=False, allow_nan=False),
+    ),
+)
+
 
 class PastState(NamedTuple):
     state: str
     created: FrozenSet[str] = frozenset()
     updated: FrozenSet[str] = frozenset()
     destroyed: FrozenSet[str] = frozenset()
+    query: Sequence[str] = []
 
 
 T = TypeVar("T")
@@ -57,6 +126,8 @@ class DrawProtocol(Protocol):
 class ConsistentHistory(stateful.RuleBasedStateMachine):
     CAPABILITY = String("urn:example:sample")
     ACCOUNT_ID = "some-account"
+    sort: List[SampleComparator]
+    filter: Optional[SampleFilter]
 
     def __init__(self) -> None:
         super().__init__()
@@ -74,6 +145,16 @@ class ConsistentHistory(stateful.RuleBasedStateMachine):
         models.metadata.create_all(self.endpoint.engine)
         with self.endpoint.engine.begin() as connection:
             connection.execute(models.accounts.insert().values(account=self.ACCOUNT_ID))
+
+    @stateful.initialize(
+        sort=st.lists(st.from_type(SampleComparator)),
+        filter=st.none(),  # TODO: st.from_type(SampleFilter)
+    )  # type: ignore
+    def make_query(
+        self, sort: List[SampleComparator], filter: Optional[SampleFilter]
+    ) -> None:
+        self.sort = sort
+        self.filter = filter
 
     def submit(self, calls: List[Tuple[str, dict, str]]) -> Response:
         body = json.dumps(
@@ -111,7 +192,7 @@ class ConsistentHistory(stateful.RuleBasedStateMachine):
         result = next(results)
         assert (result.name, result.call_id) == ("Sample/get", "live")
         assert set() == result.arguments["notFound"]
-        assert self.live == {obj.pop("id"): obj for obj in result.arguments["list"]}
+        assert self.live == {obj["id"]: obj for obj in result.arguments["list"]}
         assert current_state == result.arguments["state"]
 
         result = next(results)
@@ -166,6 +247,86 @@ class ConsistentHistory(stateful.RuleBasedStateMachine):
         assert updated == set() and destroyed == set() and created == self.live.keys()
 
     @st.composite
+    def make_specific_query(draw: DrawProtocol) -> Tuple[dict, bool, dict]:
+        self: ConsistentHistory = draw(st.runner())
+        current = self.states[-1]
+
+        call: dict = {"accountId": self.ACCOUNT_ID}
+        response: dict = {
+            "accountId": self.ACCOUNT_ID,
+            "queryState": current.state,  # FIXME: implementation detail
+            "canCalculateChanges": False,  # FIXME: implementation detail
+        }
+
+        if self.sort:
+            call["sort"] = [cmp.dict() for cmp in self.sort]
+        if self.filter:
+            call["filter"] = self.filter.dict()
+
+        total = len(current.query)
+        max_int = (1 << 53) - 1
+        limit = draw(st.integers(min_value=-1, max_value=max_int))
+
+        if limit > -1:
+            call["limit"] = limit
+        else:
+            limit = total
+
+        if draw(st.booleans()):
+            call["calculateTotal"] = True
+            response["total"] = total
+
+        position = draw(st.integers(min_value=-max_int, max_value=max_int))
+        if position != 0:
+            call["position"] = position
+            if position < 0:
+                position += total
+
+        offset = draw(st.integers(min_value=-max_int, max_value=max_int))
+        if offset != 0:
+            call["anchorOffset"] = offset
+            # ignored unless "anchor" is also specified
+
+        if draw(st.booleans()):
+            call["anchor"] = draw(
+                st.from_type(Id).filter(lambda x: x not in current.query)
+            )
+            return (call, False, {"type": "anchorNotFound"})
+
+        # Even if position is included in the call, anchor overrides it.
+        if total > 0 and draw(st.booleans()):
+            call["anchor"] = anchor = draw(st.sampled_from(current.query))
+            position = current.query.index(anchor) + offset
+
+        if position < 0:
+            position = 0
+        elif position >= total:
+            # XXX: what should the server return in this case?
+            # FIXME: probably should allow any value
+            pass
+
+        response["position"] = position
+        response["ids"] = current.query[position : position + limit]
+        return (call, True, response)
+
+    @stateful.rule(queries=st.lists(make_specific_query(), min_size=1))  # type: ignore
+    def check_query(self, queries: List[Tuple[dict, bool, dict]]) -> None:
+        response = self.submit(
+            [
+                ("Sample/query", query[0], f"matching-{idx}")
+                for idx, query in enumerate(queries)
+            ]
+        )
+        assert response.method_responses == [
+            Invocation(
+                String("Sample/query" if query[1] else "error"),
+                query[2],
+                String(f"matching-{idx}"),
+            )
+            for idx, query in enumerate(queries)
+        ]
+
+    @st.composite
     def make_set_request(draw: DrawProtocol) -> SetRequest:
         self: ConsistentHistory = draw(st.runner())
         ids = self.live.keys() | self.dead | {draw(st.from_type(Id))}
@@ -212,7 +373,7 @@ class ConsistentHistory(stateful.RuleBasedStateMachine):
             for creation_id, server_set in result.arguments["created"].items():
                 requested_create = create.pop(creation_id)
                 requested_create.update(server_set)
-                object_id = requested_create.pop(String("id"))
+                object_id = requested_create[String("id")]
                 assert object_id not in self.live and object_id not in self.dead
                 self.live[object_id] = requested_create
                 created.append(object_id)
@@ -224,7 +385,7 @@ class ConsistentHistory(stateful.RuleBasedStateMachine):
                 requested_update = update.pop(object_id)
                 if changes is not None:
                     requested_update.update(changes)
-                self.live[object_id] = requested_update
+                self.live[object_id].update(requested_update)
                 updated.append(object_id)
         if "notUpdated" in result.arguments:
             for object_id, error in result.arguments["notUpdated"].items():
@@ -253,12 +414,21 @@ class ConsistentHistory(stateful.RuleBasedStateMachine):
                     raise AssertionError(f"why wasn't {object_id} destroyed? {error!r}")
         assert destroy == set()
 
+        by_id = SampleComparator.id()
+        matching: List[Tuple[List[TypedKey], str]] = [
+            ([cmp.key(obj) for cmp in self.sort] + [by_id.key(obj)], obj["id"])
+            for obj in self.live.values()
+            if self.filter is None or self.filter.matches(obj)
+        ]
+        matching.sort()
+
         self.states.append(
             PastState(
                 state=result.arguments["newState"],
                 created=frozenset(created),
                 updated=frozenset(updated),
                 destroyed=frozenset(destroyed),
+                query=[row[1] for row in matching],
             )
         )
 
@@ -283,23 +453,3 @@ ConsistentHistory.TestCase.settings = settings(
     deadline=None,
 )
 ConsistentHistoryTestCase = ConsistentHistory.TestCase
-
-
-class SampleFilter(FilterCondition):
-    number_is: Literal["<", "=", ">"]
-    value: Number
-
-    def compile(self) -> ClauseElement:
-        column = models.objects.c.contents
-        column = column["number"].as_float()  # type: ignore
-        if self.number_is == "<":
-            return column < self.value
-        if self.number_is == "=":
-            return column == self.value
-        if self.number_is == ">":
-            return column > self.value
-        raise method.UnsupportedFilter().exception()
-
-
-class SampleMethods(StandardMethods[SampleFilter, Comparator]):
-    datatype = Sample
