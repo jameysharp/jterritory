@@ -8,6 +8,7 @@ import json
 from pydantic import ValidationError
 import re
 from sqlalchemy import select
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.future import Connection, Engine
 from traceback import print_exc
 import typing
@@ -163,18 +164,27 @@ def serializable(f: Method[RequestModel]) -> Method[RequestModel]:
     def wrapper(ctx: Context, request: RequestModel) -> None:
         dialect = ctx.connection.engine.name
         if dialect == "sqlite":
-            ctx.connection.exec_driver_sql("BEGIN IMMEDIATE")
+            begin = "BEGIN IMMEDIATE"
         elif dialect == "postgresql":
-            ctx.connection.exec_driver_sql("BEGIN ISOLATION LEVEL SERIALIZABLE")
+            begin = "BEGIN ISOLATION LEVEL SERIALIZABLE"
         else:
             raise NotImplementedError(f"unsupported database: {dialect!r}")
-        try:
-            f(ctx, request)
-        except Exception:
-            ctx.connection.exec_driver_sql("ROLLBACK")
-            raise
-        else:
-            ctx.connection.exec_driver_sql("COMMIT")
+
+        while True:
+            ctx.connection.exec_driver_sql(begin)
+            try:
+                f(ctx, request)
+            except Exception as exc:
+                # Retry if this is a Postgres "serialization_failure" or
+                # "deadlock_detected", assuming the backend is psycopg2.
+                if dialect == "postgresql" and isinstance(exc, OperationalError):
+                    if exc.orig.pgcode in ("40001", "40P01"):
+                        continue
+                ctx.connection.exec_driver_sql("ROLLBACK")
+                raise exc
+            else:
+                ctx.connection.exec_driver_sql("COMMIT")
+            break
 
     return wrapper
 
