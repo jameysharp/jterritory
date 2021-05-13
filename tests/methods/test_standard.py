@@ -2,7 +2,7 @@ from hypothesis import settings, stateful, strategies as st
 import json
 from jterritory import models
 from jterritory.api import Endpoint, Response
-from jterritory.exceptions import method, seterror
+from jterritory.exceptions import method
 from jterritory.methods.standard import BaseDatatype, SetRequest, StandardMethods
 from jterritory.query.filter import FilterCondition
 from jterritory.query.sort import Comparator
@@ -168,6 +168,7 @@ class ConsistentHistory(stateful.RuleBasedStateMachine):
     @st.composite
     def make_set_request(draw: DrawProtocol) -> SetRequest:
         self: ConsistentHistory = draw(st.runner())
+        ids = self.live.keys() | self.dead | {draw(st.from_type(Id))}
 
         # Roughly equivalent to the following, except Hypothesis throws
         # out a lot fewer random inputs as "invalid" this way:
@@ -181,12 +182,10 @@ class ConsistentHistory(stateful.RuleBasedStateMachine):
         }
         update = {
             ObjectId(object_id): cast(dict, draw(st.from_type(Sample)).dict())
-            for object_id in self.live
+            for object_id in ids
             if draw(st.booleans())
         }
-        destroy = {
-            ObjectId(object_id) for object_id in self.live if draw(st.booleans())
-        }
+        destroy = {ObjectId(object_id) for object_id in ids if draw(st.booleans())}
 
         return SetRequest(
             account_id=Id(self.ACCOUNT_ID),
@@ -219,15 +218,6 @@ class ConsistentHistory(stateful.RuleBasedStateMachine):
                 created.append(object_id)
         assert create == {}
 
-        will_destroy = dict.fromkeys(
-            destroy.intersection(update.keys()),
-            seterror.WillDestroy().dict(exclude_none=True),
-        )
-        if will_destroy:
-            assert result.arguments["notUpdated"] == will_destroy
-        else:
-            assert "notUpdated" not in result.arguments
-
         updated = []
         if "updated" in result.arguments:
             for object_id, changes in result.arguments["updated"].items():
@@ -236,16 +226,31 @@ class ConsistentHistory(stateful.RuleBasedStateMachine):
                     requested_update.update(changes)
                 self.live[object_id] = requested_update
                 updated.append(object_id)
-        assert update.keys() == will_destroy.keys()
+        if "notUpdated" in result.arguments:
+            for object_id, error in result.arguments["notUpdated"].items():
+                del update[object_id]
+                if object_id not in self.live:
+                    assert error["type"] == "notFound"
+                elif object_id in destroy:
+                    assert error["type"] == "willDestroy"
+                else:
+                    raise AssertionError(f"why wasn't {object_id} updated? {error!r}")
+        assert update == {}
 
         destroyed = []
-        assert "notDestroyed" not in result.arguments
         if "destroyed" in result.arguments:
             for object_id in result.arguments["destroyed"]:
                 destroy.remove(object_id)
                 del self.live[object_id]
                 self.dead.add(object_id)
                 destroyed.append(object_id)
+        if "notDestroyed" in result.arguments:
+            for object_id, error in result.arguments["notDestroyed"].items():
+                destroy.remove(object_id)
+                if object_id not in self.live:
+                    assert error["type"] == "notFound"
+                else:
+                    raise AssertionError(f"why wasn't {object_id} destroyed? {error!r}")
         assert destroy == set()
 
         self.states.append(
