@@ -715,7 +715,7 @@ class SetHelper:
                 pass
 
     @classmethod
-    def patch(cls, old: PartialObject, patches: PatchObject) -> Any:
+    def patch(cls, old: PartialObject, patches: PatchObject) -> PartialObject:
         # Don't modify the caller's copy of the pre-patch object, in
         # case it needs to validate that certain properties are
         # unchanged.
@@ -734,17 +734,30 @@ class SetHelper:
             # input is empty, so calling next(tokens) once can never
             # raise StopIteration.
             tokens = iter(path.reference_tokens())
-            current: Any = old
-            last = cls.key(current, next(tokens))
+            current: object = old
+            last = next(tokens)
             try:
+                # Evaluate each reference token of a JSON Pointer
+                # according to
+                # https://tools.ietf.org/html/rfc6901#section-4.
                 for token in tokens:
-                    current = current[last] = current[last].copy()
-                    last = cls.key(current, token)
-            except (KeyError, IndexError):
+                    if isinstance(current, dict):
+                        current = current[last] = current[last].copy()
+                    elif isinstance(current, list):
+                        # JMAP requires that the tokens before the last must already
+                        # exist and the last must not refer to an array element. So
+                        # JSON Pointer's "-" token (to refer to the element after
+                        # the last of an array) is never valid in this application.
+                        idx = int(last)
+                        current = current[idx] = current[idx].copy()
+                    else:
+                        raise seterror.InvalidPatch().exception()
+                    last = token
+            except (KeyError, IndexError, ValueError) as exc:
                 # "All parts prior to the last (i.e., the value after
                 # the final slash) MUST already exist on the object
                 # being patched."
-                raise seterror.InvalidPatch().exception()
+                raise seterror.InvalidPatch().exception() from exc
 
             # "The pointer MUST NOT reference inside an array (i.e., you
             # MUST NOT insert/delete from an array; the array MUST be
@@ -763,23 +776,3 @@ class SetHelper:
                     pass
 
         return old
-
-    @staticmethod
-    def key(current: Any, token: str) -> Union[int, str]:
-        """
-        Evaluate one reference token of a JSON Pointer according to
-        <https://tools.ietf.org/html/rfc6901#section-4>.
-        """
-
-        if isinstance(current, dict):
-            return token
-        if isinstance(current, list):
-            # JMAP requires that the tokens before the last must already
-            # exist and the last must not refer to an array element. So
-            # JSON Pointer's "-" token (to refer to the element after
-            # the last of an array) is never valid in this application.
-            try:
-                return int(token)
-            except ValueError:
-                pass
-        raise seterror.InvalidPatch().exception()

@@ -12,7 +12,7 @@ from sqlalchemy.exc import OperationalError
 from sqlalchemy.future import Connection, Engine
 from traceback import print_exc
 import typing
-from typing import Any, Dict, List, NamedTuple, Optional, Set, Type, TypeVar
+from typing import Dict, List, NamedTuple, Optional, Set, Type, TypeVar
 from . import exceptions, models
 from .exceptions import method, request
 from .types import BaseModel, Id, JSONPointer, ObjectId, String
@@ -102,7 +102,7 @@ class ResultReference(BaseModel):
     class Config:
         extra = "forbid"
 
-    def resolve(self, ctx: Context) -> Any:
+    def resolve(self, ctx: Context) -> object:
         for response in ctx.method_responses:
             if response.call_id == self.result_of:
                 break
@@ -119,7 +119,7 @@ class ResultReference(BaseModel):
             raise method.InvalidResultReference().exception() from exc
 
     @classmethod
-    def resolve_path(cls, within: Any, tokens: List[str]) -> Any:
+    def resolve_path(cls, within: object, tokens: List[str]) -> object:
         it = iter(tokens)
         for token in it:
             if isinstance(within, list):
