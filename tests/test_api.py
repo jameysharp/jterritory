@@ -7,7 +7,7 @@ from sqlalchemy.future import create_engine
 from typing import Any, Dict, List, NamedTuple, Optional, Protocol, TypeVar
 from jterritory.api import Endpoint, Invocation, Response
 from jterritory.types import Id, String
-from jterritory.methods.core import echo
+from jterritory.methods import core
 
 
 def st_json(max_size: int) -> st.SearchStrategy[object]:
@@ -40,7 +40,7 @@ st_invocations = st.lists(
 def endpoint() -> Endpoint:
     return Endpoint(
         capabilities=set(),
-        methods={"Core/echo": echo},
+        methods=core.methods,
         engine=create_engine("sqlite://"),
     )
 

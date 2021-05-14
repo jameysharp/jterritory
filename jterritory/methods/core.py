@@ -28,6 +28,9 @@ def echo(ctx: Context, request: Echo) -> None:
     ctx.add_response("Core/echo", request)
 
 
+methods = {"Core/echo": echo}
+
+
 class UploadResponse(BaseModel):
     "https://tools.ietf.org/html/rfc8620#section-6.1"
     account_id: Id
