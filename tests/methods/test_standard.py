@@ -14,6 +14,7 @@ from pydantic.json import pydantic_encoder
 from sqlalchemy.future import create_engine
 from sqlalchemy.sql import ClauseElement
 from typing import (
+    AbstractSet,
     Any,
     cast,
     Dict,
@@ -247,38 +248,75 @@ class ConsistentHistory(stateful.RuleBasedStateMachine):
     def check_changes(
         self,
         past: PastState,
-        created: FrozenSet[str],
-        updated: FrozenSet[str],
-        destroyed: FrozenSet[str],
+        created: AbstractSet[str],
+        updated: AbstractSet[str],
+        destroyed: AbstractSet[str],
+        limit: int = 2,
     ) -> MethodCallTests:
-        ((name, arguments),) = yield (
-            "Sample/changes",
-            {"accountId": self.ACCOUNT_ID, "since_state": past.state},
-        )
-        if name == "error":
-            assert arguments["type"] == "CannotCalculateChanges"
-            return
-        assert name == "Sample/changes"
+        actual_created: Set[str] = set()
+        actual_updated: Set[str] = set()
+        actual_destroyed: Set[str] = set()
 
-        # This assertion is stricter than the spec requires, because
-        # the same object _may_ be returned in multiple sets, but
-        # this enforces these statements: 'If a record has been
-        # created AND updated since the old state, the server SHOULD
-        # just return the id in the "created" list'; 'If a record
-        # has been updated AND destroyed since the old state, the
-        # server SHOULD just return the id in the "destroyed" list';
-        # 'If a record has been created AND destroyed since the old
-        # state, the server SHOULD remove the id from the response
-        # entirely.'
-        assert arguments == {
-            "accountId": self.ACCOUNT_ID,
-            "oldState": past.state,
-            "newState": self.states[-1].state,
-            "hasMoreChanges": False,  # TODO: test pagination
-            "created": created,
-            "updated": updated,
-            "destroyed": destroyed,
-        }
+        state = past.state
+        while True:
+            ((name, arguments),) = yield (
+                "Sample/changes",
+                {
+                    "accountId": self.ACCOUNT_ID,
+                    "sinceState": state,
+                    "maxChanges": limit,
+                },
+            )
+            if state == past.state and name == "error":
+                assert arguments["type"] == "CannotCalculateChanges"
+                return
+            assert name == "Sample/changes"
+            assert arguments["accountId"] == self.ACCOUNT_ID
+            assert arguments["oldState"] == state
+
+            # 'If a "maxChanges" is supplied, or set automatically by
+            # the server, the server MUST ensure the number of ids
+            # returned across "created", "updated", and "destroyed" does
+            # not exceed this limit.'
+            assert (
+                sum(len(arguments[s]) for s in ("created", "updated", "destroyed"))
+                <= limit
+            )
+
+            # "Where multiple changes to a record are split across
+            # different intermediate states, the server MUST NOT return
+            # a record as created after a response that deems it as
+            # updated or destroyed, and it MUST NOT return a record as
+            # destroyed before a response that deems it as created or
+            # updated."
+            assert arguments["created"].isdisjoint(actual_updated)
+            assert arguments["created"].isdisjoint(actual_destroyed)
+            assert arguments["updated"].isdisjoint(actual_destroyed)
+
+            actual_created.update(arguments["created"])
+            actual_updated.update(arguments["updated"])
+            actual_destroyed.update(arguments["destroyed"])
+
+            if not arguments["hasMoreChanges"]:
+                break
+
+            assert state != arguments["newState"]
+            state = arguments["newState"]
+
+        assert arguments["newState"] == self.states[-1].state
+
+        # This assertion is stricter than the spec requires, because the
+        # same object _may_ be returned in multiple sets, but this
+        # enforces these SHOULDs: 'If a record has been created AND
+        # updated since the old state, the server SHOULD just return the
+        # id in the "created" list'; 'If a record has been updated AND
+        # destroyed since the old state, the server SHOULD just return
+        # the id in the "destroyed" list'; 'If a record has been created
+        # AND destroyed since the old state, the server SHOULD remove
+        # the id from the response entirely.'
+        expected = (created, updated, destroyed)
+        actual = (actual_created, actual_updated, actual_destroyed)
+        assert expected == actual
 
     @stateful.invariant()  # type: ignore
     def check_history(self) -> None:
