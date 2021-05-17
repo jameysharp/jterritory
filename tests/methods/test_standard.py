@@ -13,12 +13,14 @@ from pydantic.json import pydantic_encoder
 from sqlalchemy.future import create_engine
 from sqlalchemy.sql import ClauseElement
 from typing import (
+    Any,
     cast,
     Dict,
     FrozenSet,
     List,
     Literal,
     NamedTuple,
+    Mapping,
     Optional,
     Protocol,
     Sequence,
@@ -111,6 +113,7 @@ st.register_type_strategy(
 
 class PastState(NamedTuple):
     state: str
+    query_state: str
     created: FrozenSet[str] = frozenset()
     updated: FrozenSet[str] = frozenset()
     destroyed: FrozenSet[str] = frozenset()
@@ -122,24 +125,24 @@ class SampleQuery(NamedTuple):
     error: Optional[dict] = None
     position: int = 0
 
-    def expected(self, state: str, query: Sequence[str]) -> dict:
+    def expected(self, state: PastState) -> dict:
         if self.error is not None:
             return self.error
 
         response: dict = {
             "accountId": ConsistentHistory.ACCOUNT_ID,
-            "queryState": state,  # FIXME: implementation detail
+            "queryState": state.query_state,
             "canCalculateChanges": False,  # FIXME: implementation detail
         }
 
-        total = len(query)
+        total = len(state.query)
         limit = self.call.get("limit", total)
 
         if self.call.get("calculateTotal", False):
             response["total"] = total
 
         response["position"] = self.position
-        response["ids"] = query[self.position : self.position + limit]
+        response["ids"] = state.query[self.position : self.position + limit]
         return response
 
 
@@ -156,10 +159,11 @@ class ConsistentHistory(stateful.RuleBasedStateMachine):
     ACCOUNT_ID = "some-account"
     sort: List[SampleComparator]
     filter: Optional[SampleFilter]
+    base_query: Mapping[str, Any]
 
     def __init__(self) -> None:
         super().__init__()
-        self.states: List[PastState] = [PastState("0")]
+        self.states = [PastState("0", "0")]  # FIXME: implementation details
         self.live: Dict[str, dict] = {}
         self.dead: Set[str] = set()
 
@@ -183,6 +187,12 @@ class ConsistentHistory(stateful.RuleBasedStateMachine):
     ) -> None:
         self.sort = sort
         self.filter = filter
+        base_query: dict = {"accountId": self.ACCOUNT_ID}
+        if sort:
+            base_query["sort"] = [cmp.dict() for cmp in sort]
+        if filter:
+            base_query["filter"] = filter.dict()
+        self.base_query = base_query
 
     def submit(self, calls: List[Tuple[str, dict, str]]) -> Response:
         body = json.dumps(
@@ -279,13 +289,7 @@ class ConsistentHistory(stateful.RuleBasedStateMachine):
         self: ConsistentHistory = draw(st.runner())
         current = self.states[-1]
 
-        call: dict = {"accountId": self.ACCOUNT_ID}
-
-        if self.sort:
-            call["sort"] = [cmp.dict() for cmp in self.sort]
-        if self.filter:
-            call["filter"] = self.filter.dict()
-
+        call = dict(self.base_query)
         total = len(current.query)
         max_int = (1 << 53) - 1
 
@@ -338,7 +342,7 @@ class ConsistentHistory(stateful.RuleBasedStateMachine):
         assert response.method_responses == [
             Invocation(
                 String("Sample/query" if query.error is None else "error"),
-                query.expected(current.state, current.query),
+                query.expected(current),
                 String(f"matching-{idx}"),
             )
             for idx, query in enumerate(queries)
@@ -379,16 +383,23 @@ class ConsistentHistory(stateful.RuleBasedStateMachine):
         update = request.update or {}
         destroy = request.destroy or set()
 
-        response = self.submit([("Sample/set", request.dict(), "set-call")])
-        result = response.method_responses[0]
-        assert (result.name, result.call_id) == ("Sample/set", "set-call")
-        assert response.method_responses[1:] == []
-        assert result.arguments["oldState"] in (None, self.states[-1].state)
+        query_all = dict(self.base_query, calculateTotal=True)
+        calls = [
+            ("Sample/set", request.dict(), "set-call"),
+            ("Sample/query", query_all, "query-all"),
+        ]
+        response = self.submit(calls)
+        assert [(c[0], c[2]) for c in calls] == [
+            (r[0], r[2]) for r in response.method_responses
+        ]
+        result = response.method_responses[0].arguments
+        query_result = response.method_responses[1].arguments
+        assert result["oldState"] in (None, self.states[-1].state)
 
         created = []
-        assert "notCreated" not in result.arguments
-        if "created" in result.arguments:
-            for creation_id, server_set in result.arguments["created"].items():
+        assert "notCreated" not in result
+        if "created" in result:
+            for creation_id, server_set in result["created"].items():
                 requested_create = create.pop(creation_id)
                 requested_create.update(server_set)
                 object_id = requested_create[String("id")]
@@ -398,15 +409,15 @@ class ConsistentHistory(stateful.RuleBasedStateMachine):
         assert create == {}
 
         updated = []
-        if "updated" in result.arguments:
-            for object_id, changes in result.arguments["updated"].items():
+        if "updated" in result:
+            for object_id, changes in result["updated"].items():
                 requested_update = update.pop(object_id)
                 if changes is not None:
                     requested_update.update(changes)
                 self.live[object_id].update(requested_update)
                 updated.append(object_id)
-        if "notUpdated" in result.arguments:
-            for object_id, error in result.arguments["notUpdated"].items():
+        if "notUpdated" in result:
+            for object_id, error in result["notUpdated"].items():
                 del update[object_id]
                 if object_id not in self.live:
                     assert error["type"] == "notFound"
@@ -417,14 +428,14 @@ class ConsistentHistory(stateful.RuleBasedStateMachine):
         assert update == {}
 
         destroyed = []
-        if "destroyed" in result.arguments:
-            for object_id in result.arguments["destroyed"]:
+        if "destroyed" in result:
+            for object_id in result["destroyed"]:
                 destroy.remove(object_id)
                 del self.live[object_id]
                 self.dead.add(object_id)
                 destroyed.append(object_id)
-        if "notDestroyed" in result.arguments:
-            for object_id, error in result.arguments["notDestroyed"].items():
+        if "notDestroyed" in result:
+            for object_id, error in result["notDestroyed"].items():
                 destroy.remove(object_id)
                 if object_id not in self.live:
                     assert error["type"] == "notFound"
@@ -439,14 +450,26 @@ class ConsistentHistory(stateful.RuleBasedStateMachine):
             if self.filter is None or self.filter.matches(obj)
         ]
         matching.sort()
+        query_ids = [row[1] for row in matching]
+
+        query_state = query_result.pop("queryState")
+        del query_result["canCalculateChanges"]  # skip: either way is valid
+        limit = query_result.pop("limit", len(query_ids))
+        assert query_result == {
+            "accountId": self.ACCOUNT_ID,
+            "position": 0,
+            "ids": query_ids[:limit],
+            "total": len(query_ids),
+        }
 
         self.states.append(
             PastState(
-                state=result.arguments["newState"],
+                state=result["newState"],
+                query_state=query_state,
                 created=frozenset(created),
                 updated=frozenset(updated),
                 destroyed=frozenset(destroyed),
-                query=[row[1] for row in matching],
+                query=query_ids,
             )
         )
 
