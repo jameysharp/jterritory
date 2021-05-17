@@ -117,6 +117,32 @@ class PastState(NamedTuple):
     query: Sequence[str] = []
 
 
+class SampleQuery(NamedTuple):
+    call: dict
+    error: Optional[dict] = None
+    position: int = 0
+
+    def expected(self, state: str, query: Sequence[str]) -> dict:
+        if self.error is not None:
+            return self.error
+
+        response: dict = {
+            "accountId": ConsistentHistory.ACCOUNT_ID,
+            "queryState": state,  # FIXME: implementation detail
+            "canCalculateChanges": False,  # FIXME: implementation detail
+        }
+
+        total = len(query)
+        limit = self.call.get("limit", total)
+
+        if self.call.get("calculateTotal", False):
+            response["total"] = total
+
+        response["position"] = self.position
+        response["ids"] = query[self.position : self.position + limit]
+        return response
+
+
 T = TypeVar("T")
 
 
@@ -249,16 +275,11 @@ class ConsistentHistory(stateful.RuleBasedStateMachine):
         assert updated == set() and destroyed == set() and created == self.live.keys()
 
     @st.composite
-    def make_specific_query(draw: DrawProtocol) -> Tuple[dict, bool, dict]:
+    def make_specific_query(draw: DrawProtocol) -> SampleQuery:
         self: ConsistentHistory = draw(st.runner())
         current = self.states[-1]
 
         call: dict = {"accountId": self.ACCOUNT_ID}
-        response: dict = {
-            "accountId": self.ACCOUNT_ID,
-            "queryState": current.state,  # FIXME: implementation detail
-            "canCalculateChanges": False,  # FIXME: implementation detail
-        }
 
         if self.sort:
             call["sort"] = [cmp.dict() for cmp in self.sort]
@@ -267,16 +288,12 @@ class ConsistentHistory(stateful.RuleBasedStateMachine):
 
         total = len(current.query)
         max_int = (1 << 53) - 1
-        limit = draw(st.integers(min_value=-1, max_value=max_int))
 
-        if limit > -1:
-            call["limit"] = limit
-        else:
-            limit = total
+        if draw(st.booleans()):
+            call["limit"] = draw(st.integers(min_value=0, max_value=max_int))
 
         if draw(st.booleans()):
             call["calculateTotal"] = True
-            response["total"] = total
 
         position = draw(st.integers(min_value=-max_int, max_value=max_int))
         if position != 0:
@@ -293,7 +310,7 @@ class ConsistentHistory(stateful.RuleBasedStateMachine):
             call["anchor"] = draw(
                 st.from_type(Id).filter(lambda x: x not in current.query)
             )
-            return (call, False, {"type": "anchorNotFound"})
+            return SampleQuery(call, error={"type": "anchorNotFound"})
 
         # Even if position is included in the call, anchor overrides it.
         if total > 0 and draw(st.booleans()):
@@ -307,22 +324,21 @@ class ConsistentHistory(stateful.RuleBasedStateMachine):
             # FIXME: probably should allow any value
             pass
 
-        response["position"] = position
-        response["ids"] = current.query[position : position + limit]
-        return (call, True, response)
+        return SampleQuery(call, position=position)
 
     @stateful.rule(queries=st.lists(make_specific_query(), min_size=1))  # type: ignore
-    def check_query(self, queries: List[Tuple[dict, bool, dict]]) -> None:
+    def check_query(self, queries: List[SampleQuery]) -> None:
         response = self.submit(
             [
-                ("Sample/query", query[0], f"matching-{idx}")
+                ("Sample/query", query.call, f"matching-{idx}")
                 for idx, query in enumerate(queries)
             ]
         )
+        current = self.states[-1]
         assert response.method_responses == [
             Invocation(
-                String("Sample/query" if query[1] else "error"),
-                query[2],
+                String("Sample/query" if query.error is None else "error"),
+                query.expected(current.state, current.query),
                 String(f"matching-{idx}"),
             )
             for idx, query in enumerate(queries)
