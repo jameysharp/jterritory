@@ -181,10 +181,17 @@ class StandardMethods:
     def methods(self) -> Dict[str, GenericMethod]:
         base = self.type_name
         return {
-            base + "/get": make_method(GetRequest, self.get),
-            base + "/changes": make_method(ChangesRequest, self.changes),
-            base + "/set": make_method(SetRequest, serializable(self.set)),
-            base + "/query": make_method(QueryRequest[self.filter, self.comparator], self.query),  # type: ignore
+            f"{base}/get": make_method(GetRequest, self.get),
+            f"{base}/changes": make_method(ChangesRequest, self.changes),
+            f"{base}/set": make_method(SetRequest, serializable(self.set)),
+            f"{base}/query": make_method(
+                QueryRequest[self.filter, self.comparator],  # type: ignore
+                self.query,
+            ),
+            f"{base}/queryChanges": make_method(
+                QueryChangesRequest[self.filter, self.comparator],  # type: ignore
+                self.query_changes,
+            ),
         }
 
     @property
@@ -513,6 +520,23 @@ class StandardMethods:
             limit=None,
         )
         ctx.add_response(f"{self.type_name}/query", response)
+
+    def query_changes(
+        self, ctx: Context, request: QueryChangesRequest[FilterImpl, ComparatorImpl]
+    ) -> None:
+        account = ctx.use_account(request.account_id)
+        last_changed = self.last_changed(ctx, account)
+        if str(last_changed) != request.since_query_state:
+            raise method.CannotCalculateChanges().exception()
+
+        response = QueryChangesResponse(
+            account_id=request.account_id,
+            old_query_state=request.since_query_state,
+            new_query_state=request.since_query_state,
+            removed=set(),
+            added=[],
+        )
+        ctx.add_response(f"{self.type_name}/queryChanges", response)
 
 
 @dataclass

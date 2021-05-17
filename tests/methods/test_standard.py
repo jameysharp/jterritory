@@ -318,6 +318,27 @@ class ConsistentHistory(stateful.RuleBasedStateMachine):
         actual = (actual_created, actual_updated, actual_destroyed)
         assert expected == actual
 
+    def check_query_changes(self, past: PastState) -> MethodCallTests:
+        call = dict(self.base_query, sinceQueryState=past.query_state)
+        ((name, arguments),) = yield ("Sample/queryChanges", call)
+        if name == "error":
+            assert arguments == {"type": "cannotCalculateChanges"}
+            return
+        assert name == "Sample/queryChanges"
+
+        current = self.states[-1]
+        removed = arguments.pop("removed")
+        added = arguments.pop("added")
+        assert arguments == {
+            "accountId": self.ACCOUNT_ID,
+            "oldQueryState": past.state,
+            "newQueryState": current.state,
+        }
+        actual = [object_id for object_id in past.query if object_id not in removed]
+        for addition in added:
+            actual.insert(addition["index"], addition["id"])
+        assert current.query == actual
+
     @stateful.invariant()  # type: ignore
     def check_history(self) -> None:
         tests = [self.check_live(), self.check_dead()]
@@ -334,6 +355,7 @@ class ConsistentHistory(stateful.RuleBasedStateMachine):
                     destroyed=frozenset(destroyed),
                 )
             )
+            tests.append(self.check_query_changes(past))
 
             # If the same object has had multiple state transitions
             # since a given point, the rule is that destroyed wins over
