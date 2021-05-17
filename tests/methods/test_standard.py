@@ -462,6 +462,16 @@ class ConsistentHistory(stateful.RuleBasedStateMachine):
             "total": len(query_ids),
         }
 
+        # Compared to every past query we've done, either the queryState
+        # has changed, or the query results must not have changed. "This
+        # string MUST change if the results of the query (i.e., the
+        # matching ids and their sort order) have changed. ... There is
+        # no requirement for it to change if a property on an object
+        # matching the query changes but the query results are
+        # unaffected..."
+        for past in reversed(self.states):
+            assert past.query_state != query_state or past.query == query_ids
+
         self.states.append(
             PastState(
                 state=result["newState"],
