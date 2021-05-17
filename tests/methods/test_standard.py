@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 from hypothesis import assume, settings, stateful, strategies as st
+import itertools
 import json
 from jterritory import models
-from jterritory.api import Endpoint, Invocation, Response
+from jterritory.api import Endpoint, Response
 from jterritory.exceptions import method
 from jterritory.methods.standard import BaseDatatype, SetRequest, StandardMethods
 from jterritory.query.filter import FilterCondition
@@ -17,6 +18,8 @@ from typing import (
     cast,
     Dict,
     FrozenSet,
+    Generator,
+    Iterable,
     List,
     Literal,
     NamedTuple,
@@ -120,32 +123,7 @@ class PastState(NamedTuple):
     query: Sequence[str] = []
 
 
-class SampleQuery(NamedTuple):
-    call: dict
-    error: Optional[dict] = None
-    position: int = 0
-
-    def expected(self, state: PastState) -> dict:
-        if self.error is not None:
-            return self.error
-
-        response: dict = {
-            "accountId": ConsistentHistory.ACCOUNT_ID,
-            "queryState": state.query_state,
-            "canCalculateChanges": False,  # FIXME: implementation detail
-        }
-
-        total = len(state.query)
-        limit = self.call.get("limit", total)
-
-        if self.call.get("calculateTotal", False):
-            response["total"] = total
-
-        response["position"] = self.position
-        response["ids"] = state.query[self.position : self.position + limit]
-        return response
-
-
+MethodCallTests = Generator[Tuple[str, dict], Tuple[Tuple[str, dict], ...], None]
 T = TypeVar("T")
 
 
@@ -194,80 +172,130 @@ class ConsistentHistory(stateful.RuleBasedStateMachine):
             base_query["filter"] = filter.dict()
         self.base_query = base_query
 
-    def submit(self, calls: List[Tuple[str, dict, str]]) -> Response:
-        body = json.dumps(
-            {"using": [self.CAPABILITY], "method_calls": calls},
-            default=pydantic_encoder,
-        ).encode()
-        response = self.endpoint.request(body)
-        assert isinstance(response, Response)
-        assert set(call[2] for call in calls) == set(
-            call.call_id for call in response.method_responses
+    def submit(self, tests: Iterable[MethodCallTests]) -> None:
+        # The first call to generator.send has to be given None in order
+        # to start the generator. I don't feel like convincing mypy that
+        # this is okay.
+        results: Iterable[Tuple[Tuple[str, dict], ...]]
+        results = itertools.repeat(None)  # type: ignore
+        while True:
+            calls: List[Tuple[str, dict, str]] = []
+            next_tests = []
+            for test, result in zip(tests, results):
+                try:
+                    name, arguments = test.send(result)
+                except StopIteration:
+                    continue
+                calls.append((name, arguments, f"call-{len(calls)}"))
+                next_tests.append(test)
+            tests = next_tests
+
+            if not calls:
+                return
+
+            body = json.dumps(
+                {"using": [self.CAPABILITY], "method_calls": calls},
+                default=pydantic_encoder,
+            ).encode()
+            response = self.endpoint.request(body)
+            assert isinstance(response, Response)
+            call_ids, results = zip(
+                *(
+                    (call_id, tuple((call.name, call.arguments) for call in group))
+                    for call_id, group in itertools.groupby(
+                        response.method_responses, key=lambda call: call.call_id
+                    )
+                )
+            )
+            assert tuple(c[2] for c in calls) == call_ids
+
+    @staticmethod
+    def exact(
+        call_name: str, call: dict, response_name: str, response: dict
+    ) -> MethodCallTests:
+        result = yield (call_name, call)
+        assert result == ((response_name, response),)
+
+    def check_live(self) -> MethodCallTests:
+        ((name, arguments),) = yield ("Sample/get", {"accountId": self.ACCOUNT_ID})
+        assert name == "Sample/get"
+        objects = arguments.pop("list")
+        assert arguments == {
+            "accountId": self.ACCOUNT_ID,
+            "state": self.states[-1].state,
+            "notFound": set(),
+        }
+        assert self.live == {obj["id"]: obj for obj in objects}
+
+    def check_dead(self) -> MethodCallTests:
+        result = yield (
+            "Sample/get",
+            {"accountId": self.ACCOUNT_ID, "ids": self.dead},
         )
-        return response
+        assert result == (
+            (
+                "Sample/get",
+                {
+                    "accountId": self.ACCOUNT_ID,
+                    "state": self.states[-1].state,
+                    "list": [],
+                    "notFound": self.dead,
+                },
+            ),
+        )
+
+    def check_changes(
+        self,
+        past: PastState,
+        created: FrozenSet[str],
+        updated: FrozenSet[str],
+        destroyed: FrozenSet[str],
+    ) -> MethodCallTests:
+        ((name, arguments),) = yield (
+            "Sample/changes",
+            {"accountId": self.ACCOUNT_ID, "since_state": past.state},
+        )
+        if name == "error":
+            assert arguments["type"] == "CannotCalculateChanges"
+            return
+        assert name == "Sample/changes"
+
+        # This assertion is stricter than the spec requires, because
+        # the same object _may_ be returned in multiple sets, but
+        # this enforces these statements: 'If a record has been
+        # created AND updated since the old state, the server SHOULD
+        # just return the id in the "created" list'; 'If a record
+        # has been updated AND destroyed since the old state, the
+        # server SHOULD just return the id in the "destroyed" list';
+        # 'If a record has been created AND destroyed since the old
+        # state, the server SHOULD remove the id from the response
+        # entirely.'
+        assert arguments == {
+            "accountId": self.ACCOUNT_ID,
+            "oldState": past.state,
+            "newState": self.states[-1].state,
+            "hasMoreChanges": False,  # TODO: test pagination
+            "created": created,
+            "updated": updated,
+            "destroyed": destroyed,
+        }
 
     @stateful.invariant()  # type: ignore
     def check_history(self) -> None:
-        calls: List[Tuple[str, dict, str]] = [
-            ("Sample/get", {"accountId": self.ACCOUNT_ID}, "live"),
-            (
-                "Sample/get",
-                {"accountId": self.ACCOUNT_ID, "ids": list(self.dead)},
-                "dead",
-            ),
-        ]
-        calls.extend(
-            (
-                "Sample/changes",
-                {"accountId": self.ACCOUNT_ID, "since_state": past.state},
-                f"since-{past.state}",
-            )
-            for past in reversed(self.states)
-        )
-        results = iter(self.submit(calls).method_responses)
-        current_state = self.states[-1].state
-
-        result = next(results)
-        assert (result.name, result.call_id) == ("Sample/get", "live")
-        assert set() == result.arguments["notFound"]
-        assert self.live == {obj["id"]: obj for obj in result.arguments["list"]}
-        assert current_state == result.arguments["state"]
-
-        result = next(results)
-        assert (result.name, result.call_id) == ("Sample/get", "dead")
-        assert self.dead == set(result.arguments["notFound"])
-        assert [] == result.arguments["list"]
-        assert current_state == result.arguments["state"]
+        tests = [self.check_live(), self.check_dead()]
 
         created: Set[str] = set()
         updated: Set[str] = set()
         destroyed: Set[str] = set()
-        for result, past in zip(results, reversed(self.states)):
-            assert result.call_id == f"since-{past.state}"
-            if result.name == "error":
-                assert result.arguments["type"] == "CannotCalculateChanges"
-                continue
-            assert result.name == "Sample/changes"
-
-            # This assertion is stricter than the spec requires, because
-            # the same object _may_ be returned in multiple sets, but
-            # this enforces these statements: 'If a record has been
-            # created AND updated since the old state, the server SHOULD
-            # just return the id in the "created" list'; 'If a record
-            # has been updated AND destroyed since the old state, the
-            # server SHOULD just return the id in the "destroyed" list';
-            # 'If a record has been created AND destroyed since the old
-            # state, the server SHOULD remove the id from the response
-            # entirely.'
-            assert result.arguments == {
-                "accountId": self.ACCOUNT_ID,
-                "oldState": past.state,
-                "newState": current_state,
-                "hasMoreChanges": False,  # TODO: test pagination
-                "created": created,
-                "updated": updated,
-                "destroyed": destroyed,
-            }
+        for past in reversed(self.states):
+            tests.append(
+                self.check_changes(
+                    past=past,
+                    created=frozenset(created),
+                    updated=frozenset(updated),
+                    destroyed=frozenset(destroyed),
+                )
+            )
 
             # If the same object has had multiple state transitions
             # since a given point, the rule is that destroyed wins over
@@ -283,9 +311,10 @@ class ConsistentHistory(stateful.RuleBasedStateMachine):
             destroyed.difference_update(past.created)
 
         assert updated == set() and destroyed == set() and created == self.live.keys()
+        self.submit(tests)
 
     @st.composite
-    def make_specific_query(draw: DrawProtocol) -> SampleQuery:
+    def make_specific_query(draw: DrawProtocol) -> Tuple[dict, str, dict]:
         self: ConsistentHistory = draw(st.runner())
         current = self.states[-1]
 
@@ -314,7 +343,7 @@ class ConsistentHistory(stateful.RuleBasedStateMachine):
             call["anchor"] = draw(
                 st.from_type(Id).filter(lambda x: x not in current.query)
             )
-            return SampleQuery(call, error={"type": "anchorNotFound"})
+            return (call, "error", {"type": "anchorNotFound"})
 
         # Even if position is included in the call, anchor overrides it.
         if total > 0 and draw(st.booleans()):
@@ -328,25 +357,24 @@ class ConsistentHistory(stateful.RuleBasedStateMachine):
             # FIXME: probably should allow any value
             pass
 
-        return SampleQuery(call, position=position)
+        response: dict = {
+            "accountId": ConsistentHistory.ACCOUNT_ID,
+            "queryState": current.query_state,
+            "canCalculateChanges": False,  # FIXME: implementation detail
+            "position": position,
+        }
+
+        limit = call.get("limit", total)
+
+        if call.get("calculateTotal", False):
+            response["total"] = total
+
+        response["ids"] = current.query[position : position + limit]
+        return (call, "Sample/query", response)
 
     @stateful.rule(queries=st.lists(make_specific_query(), min_size=1))  # type: ignore
-    def check_query(self, queries: List[SampleQuery]) -> None:
-        response = self.submit(
-            [
-                ("Sample/query", query.call, f"matching-{idx}")
-                for idx, query in enumerate(queries)
-            ]
-        )
-        current = self.states[-1]
-        assert response.method_responses == [
-            Invocation(
-                String("Sample/query" if query.error is None else "error"),
-                query.expected(current),
-                String(f"matching-{idx}"),
-            )
-            for idx, query in enumerate(queries)
-        ]
+    def check_query(self, queries: List[Tuple[dict, str, dict]]) -> None:
+        self.submit(self.exact("Sample/query", *query) for query in queries)
 
     @st.composite
     def make_set_request(draw: DrawProtocol) -> SetRequest:
@@ -379,21 +407,16 @@ class ConsistentHistory(stateful.RuleBasedStateMachine):
 
     @stateful.rule(request=make_set_request())  # type: ignore
     def make_changes(self, request: SetRequest) -> None:
+        self.submit([self.changes(request)])
+
+    def changes(self, request: SetRequest) -> MethodCallTests:
         create = request.create or {}
         update = request.update or {}
         destroy = request.destroy or set()
 
-        query_all = dict(self.base_query, calculateTotal=True)
-        calls = [
-            ("Sample/set", request.dict(), "set-call"),
-            ("Sample/query", query_all, "query-all"),
-        ]
-        response = self.submit(calls)
-        assert [(c[0], c[2]) for c in calls] == [
-            (r[0], r[2]) for r in response.method_responses
-        ]
-        result = response.method_responses[0].arguments
-        query_result = response.method_responses[1].arguments
+        ((name, result),) = yield ("Sample/set", request.dict())
+        assert name == "Sample/set"
+
         assert result["oldState"] in (None, self.states[-1].state)
 
         created = []
@@ -452,6 +475,10 @@ class ConsistentHistory(stateful.RuleBasedStateMachine):
         matching.sort()
         query_ids = [row[1] for row in matching]
 
+        query_all = dict(self.base_query, calculateTotal=True)
+        ((name, query_result),) = yield ("Sample/query", query_all)
+        assert name == "Sample/query"
+
         query_state = query_result.pop("queryState")
         del query_result["canCalculateChanges"]  # skip: either way is valid
         limit = query_result.pop("limit", len(query_ids))
@@ -486,15 +513,13 @@ class ConsistentHistory(stateful.RuleBasedStateMachine):
     @stateful.rule(bad_state=st.text())  # type: ignore
     def state_mismatch(self, bad_state: str) -> None:
         assume(bad_state != self.states[-1].state)
-        call = (
+        test = self.exact(
             "Sample/set",
             {"accountId": self.ACCOUNT_ID, "ifInState": bad_state},
-            "bad-set",
+            "error",
+            {"type": "stateMismatch"},
         )
-        response = self.submit([call])
-        assert response.method_responses == [
-            ("error", {"type": "stateMismatch"}, "bad-set"),
-        ]
+        self.submit([test])
 
 
 # This test takes time quadratic in the number of steps but tests a lot
