@@ -268,7 +268,7 @@ class ConsistentHistory(stateful.RuleBasedStateMachine):
                 },
             )
             if state == past.state and name == "error":
-                assert arguments["type"] == "CannotCalculateChanges"
+                assert arguments == {"type": "cannotCalculateChanges"}
                 return
             assert name == "Sample/changes"
             assert arguments["accountId"] == self.ACCOUNT_ID
