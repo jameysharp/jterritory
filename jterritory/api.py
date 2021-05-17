@@ -11,8 +11,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.future import Connection, Engine
 from traceback import print_exc
-import typing
-from typing import Dict, List, NamedTuple, Optional, Set, Type, TypeVar
+from typing import Any, Callable, Dict, List, NamedTuple, Optional, Set, Type, TypeVar
 from . import exceptions, models
 from .exceptions import method, request
 from .types import BaseModel, Id, JSONPointer, ObjectId, String
@@ -151,15 +150,27 @@ class ResultReference(BaseModel):
         return result
 
 
-RequestModel = TypeVar("RequestModel", contravariant=True, bound=BaseModel)
+RequestModel = TypeVar("RequestModel", bound=BaseModel)
+MethodHandler = Callable[[Context, RequestModel], None]
+GenericMethod = Callable[[Context, Any], None]
 
 
-class Method(typing.Protocol[RequestModel]):
-    def __call__(self, ctx: Context, request: RequestModel) -> None:
-        ...
+def make_method(
+    model: Type[RequestModel], handler: MethodHandler[RequestModel]
+) -> GenericMethod:
+    @wraps(handler)
+    def call_method(ctx: Context, raw_arguments: Any) -> None:
+        try:
+            arguments = model.parse_obj(raw_arguments)
+        except ValidationError as exc:
+            raise method.InvalidArguments(description=str(exc)).exception() from exc
+
+        handler(ctx, arguments)
+
+    return call_method
 
 
-def serializable(f: Method[RequestModel]) -> Method[RequestModel]:
+def serializable(f: "MethodHandler[RequestModel]") -> "MethodHandler[RequestModel]":
     @wraps(f)
     def wrapper(ctx: Context, request: RequestModel) -> None:
         dialect = ctx.connection.engine.name
@@ -192,7 +203,7 @@ def serializable(f: Method[RequestModel]) -> Method[RequestModel]:
 @dataclass
 class Endpoint:
     capabilities: Set[String]
-    methods: Dict[str, Method]
+    methods: Dict[str, GenericMethod]
     engine: Engine
 
     def __post_init__(self) -> None:
@@ -234,7 +245,6 @@ class Endpoint:
                         handler = self.methods[invocation.name]
                     except KeyError:
                         raise method.UnknownMethod().exception()
-                    hints = typing.get_type_hints(handler)
 
                     raw_arguments = {}
                     for k, v in invocation.arguments.items():
@@ -252,14 +262,7 @@ class Endpoint:
                             ).exception()
                         raw_arguments[k] = v
 
-                    try:
-                        arguments = hints["request"].parse_obj(raw_arguments)
-                    except ValidationError as exc:
-                        raise method.InvalidArguments(
-                            description=str(exc)
-                        ).exception() from exc
-
-                    handler(ctx, arguments)
+                    handler(ctx, raw_arguments)
                 except exceptions.MethodException as exc:
                     ctx.add_response("error", exc.args[0])
                 except Exception:

@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, Optional, Set
 from .. import exceptions
-from ..api import Context
+from ..api import Context, make_method
 from ..types import BaseModel, Id, String, UnsignedInt
 
 
@@ -28,7 +28,7 @@ def echo(ctx: Context, request: Echo) -> None:
     ctx.add_response("Core/echo", request)
 
 
-methods = {"Core/echo": echo}
+methods = {"Core/echo": make_method(Echo, echo)}
 
 
 class UploadResponse(BaseModel):

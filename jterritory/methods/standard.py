@@ -21,14 +21,13 @@ from pydantic import parse_obj_as, ValidationError
 import re
 from sqlalchemy import false, func, null, select, and_, or_
 from sqlalchemy.sql import ClauseElement
-import typing
-from typing import Any, Dict, Generic, List, Mapping, Optional, Set, Tuple, Type, Union
+from typing import Any, Dict, Generic, List, Mapping, Optional, Set, Type, Union
 from zlib import crc32
 from .. import exceptions, models
-from ..api import Context, Method, serializable
+from ..api import Context, GenericMethod, make_method, serializable
 from ..exceptions import method, seterror
-from ..query.filter import FilterImpl, FilterOperator
-from ..query.sort import ComparatorImpl, SortKey, numberKey
+from ..query.filter import FilterCondition, FilterImpl, FilterOperator
+from ..query.sort import Comparator, ComparatorImpl, SortKey, numberKey
 from ..types import BaseModel, GenericModel, ObjectId
 from ..types import Boolean, Id, Int, JSONPointer, PositiveInt, String, UnsignedInt
 
@@ -174,26 +173,19 @@ class QueryChangesResponse(BaseModel):
     added: List[AddedItem]
 
 
-class StandardMethods(Generic[FilterImpl, ComparatorImpl]):
+class StandardMethods:
     datatype: Type[BaseDatatype]
+    filter: Type[FilterCondition] = FilterCondition
+    comparator: Type[Comparator] = Comparator
 
-    def methods(self) -> Dict[str, Method]:
+    def methods(self) -> Dict[str, GenericMethod]:
         base = self.type_name
         return {
-            base + "/get": self.get,
-            base + "/changes": self.changes,
-            base + "/set": serializable(self.set),
-            base + "/query": self.query,
+            base + "/get": make_method(GetRequest, self.get),
+            base + "/changes": make_method(ChangesRequest, self.changes),
+            base + "/set": make_method(SetRequest, serializable(self.set)),
+            base + "/query": make_method(QueryRequest[self.filter, self.comparator], self.query),  # type: ignore
         }
-
-    @property
-    def query_types(self) -> Tuple[Type[FilterImpl], Type[ComparatorImpl]]:
-        try:
-            return typing.get_args(self.__orig_class__)  # type: ignore
-        except AttributeError as exc:
-            raise TypeError(
-                "StandardMethods must be instantiated with concrete types"
-            ) from exc
 
     @property
     def type_name(self) -> str:

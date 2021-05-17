@@ -74,8 +74,10 @@ class SampleFilter(FilterCondition):
         raise AssertionError(f"unknown operator {self.number_is!r}")
 
 
-class SampleMethods(StandardMethods[SampleFilter, SampleComparator]):
+class SampleMethods(StandardMethods):
     datatype = Sample
+    filter = SampleFilter
+    comparator = SampleComparator
 
 
 st.register_type_strategy(
@@ -148,7 +150,7 @@ class ConsistentHistory(stateful.RuleBasedStateMachine):
 
     @stateful.initialize(
         sort=st.lists(st.from_type(SampleComparator)),
-        filter=st.none(),  # TODO: st.from_type(SampleFilter)
+        filter=st.none() | st.from_type(SampleFilter),
     )  # type: ignore
     def make_query(
         self, sort: List[SampleComparator], filter: Optional[SampleFilter]
