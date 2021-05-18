@@ -331,8 +331,8 @@ class ConsistentHistory(stateful.RuleBasedStateMachine):
         added = arguments.pop("added")
         assert arguments == {
             "accountId": self.ACCOUNT_ID,
-            "oldQueryState": past.state,
-            "newQueryState": current.state,
+            "oldQueryState": past.query_state,
+            "newQueryState": current.query_state,
         }
         actual = [object_id for object_id in past.query if object_id not in removed]
         for addition in added:

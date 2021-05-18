@@ -16,16 +16,21 @@ https://tools.ietf.org/html/rfc8620#section-5
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from functools import cached_property
+import hashlib
 from itertools import islice
+import json
 from pydantic import parse_obj_as, ValidationError
 import re
 from sqlalchemy import false, func, null, select, and_, or_
 from sqlalchemy.sql import ClauseElement
-from typing import Any, Dict, Generic, List, Mapping, Optional, Set, Tuple, Type, Union
+from typing import Any, Dict, Generic, List, Optional, Set, Type, Union
+from typing import Mapping, Sequence
 from zlib import crc32
 from .. import exceptions, models
 from ..api import Context, GenericMethod, make_method, serializable
 from ..exceptions import method, seterror
+from ..query.changes import Changes
 from ..query.filter import FilterCondition, FilterImpl, FilterOperator
 from ..query.sort import Comparator, ComparatorImpl, SortKey, TypedKey, numberKey
 from ..types import BaseModel, GenericModel, ObjectId
@@ -129,6 +134,17 @@ class QueryRequestCommon(GenericModel, Generic[FilterImpl, ComparatorImpl]):
     sort: Optional[List[ComparatorImpl]]
     calculate_total: Boolean = False
 
+    @cached_property
+    def _cache_key(self) -> str:
+        hasher = hashlib.sha256()
+        hasher.update(self.account_id.encode())
+        encoder = json.JSONEncoder(sort_keys=True, separators=(",", ":"))
+        for chunk in encoder.iterencode(self.filter and self.filter.dict()):
+            hasher.update(chunk.encode())
+        for chunk in encoder.iterencode([cmp.dict() for cmp in self.sort or []]):
+            hasher.update(chunk.encode())
+        return hasher.hexdigest()
+
 
 class QueryRequest(QueryRequestCommon, Generic[FilterImpl, ComparatorImpl]):
     "https://tools.ietf.org/html/rfc8620#section-5.5"
@@ -176,6 +192,9 @@ class StandardMethods:
     datatype: Type[BaseDatatype]
     filter: Type[FilterCondition] = FilterCondition
     comparator: Type[Comparator] = Comparator
+
+    def __init__(self) -> None:
+        self.query_results: Dict[str, List[CachedQueryResult]] = {}
 
     def methods(self) -> Dict[str, GenericMethod]:
         base = self.type_name
@@ -445,6 +464,7 @@ class StandardMethods:
         self,
         ctx: Context,
         request: QueryRequestCommon[FilterImpl, ComparatorImpl],
+        since: Optional[int] = None,
     ) -> RawQueryResult:
         account = ctx.use_account(request.account_id)
 
@@ -469,34 +489,77 @@ class StandardMethods:
         if request.filter is not None:
             criteria = and_(criteria, request.filter.compile())
 
+        has_filter_column = since is not None
+
         columns: List[ClauseElement] = [models.objects.c.changed]
+        if has_filter_column:
+            columns.append(criteria)
         columns.extend(key.column for key in order)
+
         query = select(*columns).where(
             models.objects.c.account == account,
             models.objects.c.datatype == self.internal_id,
-            criteria,
         )
 
-        last_changed = self.last_changed(ctx, account)
-        rows = []
+        if has_filter_column:  # since is not None
+            query = query.where(models.objects.c.changed > since)
+        else:
+            query = query.where(criteria)
+
+        result = RawQueryResult()
+
+        # If since is not None, we'll see all the newest changes,
+        # including destroyed objects, so we don't need to separately
+        # look up the newest change.
+        result.last_changed = since or self.last_changed(ctx, account)
+
         for row in ctx.connection.execute(query):
             it = iter(row)
 
             changed = next(it)
-            if last_changed < changed:
-                last_changed = changed
+            if result.last_changed < changed:
+                result.last_changed = changed
 
-            rows.append(tuple(k.key(x) for k, x in zip(order, it)))
+            if has_filter_column and not next(it):
+                result.excluded.add(row[-1])
+            else:
+                result.included.append(tuple(k.key(x) for k, x in zip(order, it)))
 
-        return RawQueryResult(last_changed=last_changed, included=rows)
+        return result
+
+    def revalidate_query_cache(
+        self, ctx: Context, request: QueryRequestCommon[FilterImpl, ComparatorImpl]
+    ) -> CachedQueryResult:
+        cached = self.query_results.get(request._cache_key) or []
+        if cached:
+            last = cached[-1]
+            result = self.query_commmon(ctx, request, since=last.valid_until)
+            result.excluded.update(row[-1].obj for row in result.included)
+            result.included.extend(
+                row for row in last.objects if row[-1].obj not in result.excluded
+            )
+            result.included.sort()
+            old = [row[-1].obj for row in last.objects]
+            new = [row[-1].obj for row in result.included]
+            if old == new:
+                last.valid_until = result.last_changed
+                return last
+        else:
+            result = self.query_commmon(ctx, request)
+            result.included.sort()
+            self.query_results[request._cache_key] = cached
+
+        last = CachedQueryResult(
+            result.last_changed, result.last_changed, result.included
+        )
+        cached.append(last)
+        return last
 
     def query(
         self, ctx: Context, request: QueryRequest[FilterImpl, ComparatorImpl]
     ) -> None:
-        result = self.query_commmon(ctx, request)
-        rows = result.included
-        rows.sort()
-        objects = [ObjectId.from_int(row[-1].obj) for row in rows]
+        result = self.revalidate_query_cache(ctx, request)
+        objects = result.object_ids()
 
         start: int = request.position
         if request.anchor is not None:
@@ -532,25 +595,43 @@ class StandardMethods:
     def query_changes(
         self, ctx: Context, request: QueryChangesRequest[FilterImpl, ComparatorImpl]
     ) -> None:
-        account = ctx.use_account(request.account_id)
-        last_changed = self.last_changed(ctx, account)
-        if str(last_changed) != request.since_query_state:
+        for old in self.query_results.get(request._cache_key) or []:
+            if request.since_query_state == String(old.last_changed):
+                break
+        else:
             raise method.CannotCalculateChanges().exception()
+
+        current = self.revalidate_query_cache(ctx, request)
+        changes = Changes.diff(old.object_ids(), current.object_ids())
 
         response = QueryChangesResponse(
             account_id=request.account_id,
             old_query_state=request.since_query_state,
-            new_query_state=request.since_query_state,
-            removed=set(),
-            added=[],
+            new_query_state=String(current.last_changed),
+            removed={pos.objectId for pos in changes.removed},
+            added=[
+                AddedItem(index=UnsignedInt(pos.position), id=pos.objectId)
+                for pos in changes.added
+            ],
         )
         ctx.add_response(f"{self.type_name}/queryChanges", response)
 
 
 @dataclass
 class RawQueryResult:
+    last_changed: int = 0
+    included: List[Sequence[TypedKey]] = field(default_factory=list)
+    excluded: Set[int] = field(default_factory=set)
+
+
+@dataclass
+class CachedQueryResult:
     last_changed: int
-    included: List[Tuple[TypedKey, ...]]
+    valid_until: int
+    objects: Sequence[Sequence[TypedKey]]
+
+    def object_ids(self) -> List[ObjectId]:
+        return [ObjectId.from_int(row[-1].obj) for row in self.objects]
 
 
 @dataclass
