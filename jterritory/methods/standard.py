@@ -21,13 +21,13 @@ from pydantic import parse_obj_as, ValidationError
 import re
 from sqlalchemy import false, func, null, select, and_, or_
 from sqlalchemy.sql import ClauseElement
-from typing import Any, Dict, Generic, List, Mapping, Optional, Set, Type, Union
+from typing import Any, Dict, Generic, List, Mapping, Optional, Set, Tuple, Type, Union
 from zlib import crc32
 from .. import exceptions, models
 from ..api import Context, GenericMethod, make_method, serializable
 from ..exceptions import method, seterror
 from ..query.filter import FilterCondition, FilterImpl, FilterOperator
-from ..query.sort import Comparator, ComparatorImpl, SortKey, numberKey
+from ..query.sort import Comparator, ComparatorImpl, SortKey, TypedKey, numberKey
 from ..types import BaseModel, GenericModel, ObjectId
 from ..types import Boolean, Id, Int, JSONPointer, PositiveInt, String, UnsignedInt
 
@@ -123,16 +123,19 @@ class CopyResponse(BaseModel):
     not_created: Optional[Dict[Id, exceptions.SetError]]
 
 
-class QueryRequest(GenericModel, Generic[FilterImpl, ComparatorImpl]):
-    "https://tools.ietf.org/html/rfc8620#section-5.5"
+class QueryRequestCommon(GenericModel, Generic[FilterImpl, ComparatorImpl]):
     account_id: Id
     filter: Union[FilterOperator[FilterImpl], FilterImpl, None]
     sort: Optional[List[ComparatorImpl]]
+    calculate_total: Boolean = False
+
+
+class QueryRequest(QueryRequestCommon, Generic[FilterImpl, ComparatorImpl]):
+    "https://tools.ietf.org/html/rfc8620#section-5.5"
     position: Int = Int(0)
     anchor: Optional[ObjectId]
     anchor_offset: Int = Int(0)
     limit: Optional[UnsignedInt]  # XXX: shouldn't 0 be prohibited too?
-    calculate_total: Boolean = False
 
 
 class QueryResponse(BaseModel):
@@ -146,15 +149,11 @@ class QueryResponse(BaseModel):
     limit: Optional[UnsignedInt]
 
 
-class QueryChangesRequest(GenericModel, Generic[FilterImpl, ComparatorImpl]):
+class QueryChangesRequest(QueryRequestCommon, Generic[FilterImpl, ComparatorImpl]):
     "https://tools.ietf.org/html/rfc8620#section-5.6"
-    account_id: Id
-    filter: Union[FilterOperator[FilterImpl], FilterImpl, None]
-    sort: Optional[List[ComparatorImpl]]
     since_query_state: String
     max_changes: Optional[UnsignedInt]  # XXX: shouldn't 0 be prohibited too?
     up_to_id: Optional[ObjectId]
-    calculate_total: Boolean = False
 
 
 class AddedItem(BaseModel):
@@ -442,9 +441,11 @@ class StandardMethods:
         )
         ctx.add_response(f"{self.type_name}/set", response)
 
-    def query(
-        self, ctx: Context, request: QueryRequest[FilterImpl, ComparatorImpl]
-    ) -> None:
+    def query_commmon(
+        self,
+        ctx: Context,
+        request: QueryRequestCommon[FilterImpl, ComparatorImpl],
+    ) -> RawQueryResult:
         account = ctx.use_account(request.account_id)
 
         # Since object IDs are unique, if the sort criteria include the
@@ -487,6 +488,13 @@ class StandardMethods:
 
             rows.append(tuple(k.key(x) for k, x in zip(order, it)))
 
+        return RawQueryResult(last_changed=last_changed, included=rows)
+
+    def query(
+        self, ctx: Context, request: QueryRequest[FilterImpl, ComparatorImpl]
+    ) -> None:
+        result = self.query_commmon(ctx, request)
+        rows = result.included
         rows.sort()
         objects = [ObjectId.from_int(row[-1].obj) for row in rows]
 
@@ -512,7 +520,7 @@ class StandardMethods:
 
         response = QueryResponse(
             account_id=request.account_id,
-            query_state=String(last_changed),
+            query_state=String(result.last_changed),
             can_calculate_changes=False,
             position=UnsignedInt(start),
             ids=objects[start:end],
@@ -537,6 +545,12 @@ class StandardMethods:
             added=[],
         )
         ctx.add_response(f"{self.type_name}/queryChanges", response)
+
+
+@dataclass
+class RawQueryResult:
+    last_changed: int
+    included: List[Tuple[TypedKey, ...]]
 
 
 @dataclass
